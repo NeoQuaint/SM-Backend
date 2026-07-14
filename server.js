@@ -1,0 +1,42 @@
+require('dotenv').config();
+const express = require('express');
+const cors = require('cors');
+
+const authRoutes = require('./routes/auth');
+const subjectsRoutes = require('./routes/subjects');
+const tutorsRoutes = require('./routes/tutors');
+const matchingRoutes = require('./routes/matching');
+const packagesRoutes = require('./routes/packages');
+const subscriptionsRoutes = require('./routes/subscriptions');
+const sessionsRoutes = require('./routes/sessions');
+const messagesRoutes = require('./routes/messages');
+const reviewsRoutes = require('./routes/reviews');
+const analyticsRoutes = require('./routes/analytics');
+
+const app = express();
+const PORT = process.env.PORT || 5001;
+
+app.use(cors({
+  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  credentials: true
+}));
+app.use(express.json());
+
+app.get('/', (req, res) => {
+  res.json({ status: 'ok', service: 'SmartClass API', version: '1.0.0' });
+});
+
+app.use('/api/auth', authRoutes);
+app.use('/api/subjects', subjectsRoutes);
+app.use('/api/tutors', tutorsRoutes);
+app.use('/api/match-tutors', matchingRoutes);
+app.use('/api/packages', packagesRoutes);
+app.use('/api/subscriptions', subscriptionsRoutes);
+app.use('/api/sessions', sessionsRoutes);
+app.use('/api/messages', messagesRoutes);
+app.use('/api/reviews', reviewsRoutes);
+app.use('/api/track-event', analyticsRoutes);
+
+app.listen(PORT, () => {
+  console.log(`🚀 SmartClass API running on port ${PORT}`);
+});
