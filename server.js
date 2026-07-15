@@ -12,6 +12,7 @@ const sessionsRoutes = require('./routes/sessions');
 const messagesRoutes = require('./routes/messages');
 const reviewsRoutes = require('./routes/reviews');
 const analyticsRoutes = require('./routes/analytics');
+const neoRoutes = require('./routes/neo');
 
 const app = express();
 const PORT = process.env.PORT || 5001;
@@ -20,10 +21,14 @@ app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:3000',
   credentials: true
 }));
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 
 app.get('/', (req, res) => {
   res.json({ status: 'ok', service: 'SmartClass API', version: '1.0.0' });
+});
+
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'Neo is awake', database: 'connected', timestamp: new Date().toISOString() });
 });
 
 app.use('/api/auth', authRoutes);
@@ -36,6 +41,7 @@ app.use('/api/sessions', sessionsRoutes);
 app.use('/api/messages', messagesRoutes);
 app.use('/api/reviews', reviewsRoutes);
 app.use('/api/track-event', analyticsRoutes);
+app.use('/api/neo', neoRoutes);
 
 app.listen(PORT, () => {
   console.log(`🚀 SmartClass API running on port ${PORT}`);
