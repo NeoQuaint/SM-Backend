@@ -18,7 +18,15 @@ const app = express();
 const PORT = process.env.PORT || 5001;
 
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  origin: [
+    'https://smartclasss.com',
+    'https://www.smartclasss.com',
+    'https://sm-simple.vercel.app',
+    'https://sm-simple-1wj0qfubn-skolify.vercel.app',
+    process.env.FRONTEND_URL,
+    'http://localhost:3000',
+    'http://localhost:5173'
+  ].filter(Boolean),
   credentials: true
 }));
 app.use(express.json({ limit: '10mb' }));
