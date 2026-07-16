@@ -16,17 +16,15 @@ const performanceDescriptions = {
 };
 
 // ==========================================
-// ASK NEO (Text) - Temporarily public for testing
-// Add 'auth' middleware back before going live
+// ASK NEO (Text)
 // ==========================================
 router.post('/ask', async (req, res) => {
-  const { message, subject, roomId, userId } = req.body;
+  const { message, subject, roomId, userId, systemPrompt, context } = req.body;
 
   if (!message || !message.trim()) {
     return res.status(400).json({ error: 'Message is required' });
   }
 
-  // TEMP: Use userId from request body instead of JWT
   req.userId = userId || 'test-user';
 
   try {
@@ -69,7 +67,8 @@ router.post('/ask', async (req, res) => {
       console.log('Could not fetch history:', dbErr.message);
     }
 
-    const systemPrompt = `You are Neo, the AI tutor inside SmartClass — a South African edtech platform. You are warm, patient, and brilliant at teaching.
+    // Use provided system prompt or build default
+    const finalSystemPrompt = systemPrompt || `You are Neo, the AI tutor inside SmartClass — a South African edtech platform. You are warm, patient, and brilliant at teaching.
 
 ━━━━━━━━━━━━━━━━━━━━━━━
 STUDENT PROFILE
@@ -91,50 +90,17 @@ TEACHING RULES (Follow strictly)
 ━━━━━━━━━━━━━━━━━━━━━━━
 
 1. TEACH AT THE RIGHT LEVEL
-   - This student is in Grade ${grade} (${level})
-   - Use vocabulary, examples, and pacing appropriate for Grade ${grade}
-   - If they're performing poorly in a subject, start from basics
-   - If they're performing well, challenge them appropriately
-
 2. BREAK EVERYTHING INTO STEPS
-   - Never dump a wall of explanation
-   - Number your steps clearly
-   - Pause between concepts: "Ready for the next part?"
-   - Use the Socratic method — ask guiding questions
+3. BE A REAL TEACHER — celebrate, encourage, check understanding
+4. SOUTH AFRICAN CONTEXT — rands, local examples, CAPS awareness
+5. NEVER just give the answer — guide discovery
+6. Keep responses 3-4 paragraphs max unless asked for more
+7. Sound human, warm, and genuinely invested
 
-3. BE A REAL TEACHER
-   - Celebrate wins: "That's exactly right! 🎉"
-   - Encourage effort: "Good try — you're close. Let me help."
-   - Check understanding: "Does that make sense?"
-   - Offer options: "Want an example or should we practice?"
-
-4. SOUTH AFRICAN CONTEXT
-   - Use rands (R) for money examples
-   - Reference CAPS curriculum awareness
-   - Use local examples when relevant
-   - Be culturally aware and inclusive
-
-5. SUBJECT-SPECIFIC RULES
-   - MATH: Show every step. Never skip. Use visual descriptions.
-   - SCIENCE: Connect to real-world examples. Explain the "why."
-   - ENGLISH: Focus on comprehension and expression.
-
-6. QUALITY STANDARDS
-   - NEVER just give the answer — guide discovery
-   - If you don't know something, admit it honestly
-   - Keep responses 3-4 paragraphs max unless asked for more
-   - Use plain language, not academic jargon
-   - Sound human, warm, and genuinely invested in their learning
-
-━━━━━━━━━━━━━━━━━━━━━━━
-RESPONSE FORMAT
-━━━━━━━━━━━━━━━━━━━━━━━
-- Use clear spacing between ideas
-- Number steps when explaining processes
-- End with a check-in question unless it's a natural conclusion`;
+End with a check-in question unless it's a natural conclusion.`;
 
     const messages = [
-      { role: 'system', content: systemPrompt },
+      { role: 'system', content: finalSystemPrompt },
     ];
 
     for (const h of history) {
@@ -154,7 +120,7 @@ RESPONSE FORMAT
     const neoReply = completion.choices[0].message.content;
     const tokensUsed = completion.usage?.total_tokens || 0;
 
-    // Try to save to conversation history
+    // Save to conversation history
     try {
       await pool.query(
         `INSERT INTO neo_conversations 
@@ -165,7 +131,7 @@ RESPONSE FORMAT
           roomId || null,
           message,
           neoReply,
-          JSON.stringify({ grade, level, subject: currentSubject, performance }),
+          JSON.stringify(context || { grade, level, subject: currentSubject, performance }),
           tokensUsed,
           'deepseek-chat'
         ]
@@ -184,6 +150,56 @@ RESPONSE FORMAT
     res.status(500).json({ 
       error: 'Neo is having trouble thinking. Try asking again.' 
     });
+  }
+});
+
+// ==========================================
+// NEO MEMORY — Store and retrieve student context
+// ==========================================
+
+// Get student memory
+router.get('/memory/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    const result = await pool.query(
+      `SELECT * FROM neo_memory WHERE user_id = $1`,
+      [userId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.json({ memory: {}, patterns: {}, preferences: {} });
+    }
+
+    const memory = result.rows[0];
+    res.json({
+      memory: memory.memory_data || {},
+      patterns: memory.patterns || {},
+      preferences: memory.preferences || {},
+    });
+  } catch (err) {
+    console.error('Memory load error:', err);
+    res.status(500).json({ error: 'Could not load memory' });
+  }
+});
+
+// Save student memory
+router.post('/memory', async (req, res) => {
+  try {
+    const { userId, memory, patterns, preferences } = req.body;
+
+    await pool.query(
+      `INSERT INTO neo_memory (user_id, memory_data, patterns, preferences, updated_at) 
+       VALUES ($1, $2, $3, $4, NOW())
+       ON CONFLICT (user_id) 
+       DO UPDATE SET memory_data = $2, patterns = $3, preferences = $4, updated_at = NOW()`,
+      [userId, JSON.stringify(memory), JSON.stringify(patterns), JSON.stringify(preferences)]
+    );
+
+    res.json({ status: 'saved' });
+  } catch (err) {
+    console.error('Memory save error:', err);
+    res.status(500).json({ error: 'Could not save memory' });
   }
 });
 
