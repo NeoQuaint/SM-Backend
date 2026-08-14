@@ -8,6 +8,10 @@ const openai = new OpenAI({
   baseURL: 'https://api.deepseek.com/v1',
 });
 
+// ElevenLabs Configuration
+const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY || 'sk_05461024a3455ae42808f82b94d65e39dd6e95c4e318183d';
+const ELEVENLABS_VOICE_ID = process.env.ELEVENLABS_VOICE_ID || 'cgSgspJ2msm6clMCkdW9'; // Jessica
+
 const performanceDescriptions = {
   'Bad': 'struggling significantly and needs foundational help',
   'Fair': 'has basic understanding but needs more practice',
@@ -150,6 +154,72 @@ End with a check-in question unless it's a natural conclusion.`;
     res.status(500).json({ 
       error: 'Neo is having trouble thinking. Try asking again.' 
     });
+  }
+});
+
+// ==========================================
+// NEO SPEAK — ElevenLabs Text-to-Speech Proxy
+// ==========================================
+router.post('/speak', async (req, res) => {
+  try {
+    const { text } = req.body;
+
+    if (!text || !text.trim()) {
+      return res.status(400).json({ error: 'Text is required' });
+    }
+
+    const cleanText = text.replace(/[^a-zA-Z0-9\s.,!?()=+\-']/g, '');
+
+    if (!cleanText.trim()) {
+      return res.status(400).json({ error: 'No valid text to speak' });
+    }
+
+    console.log('Neo speaking:', cleanText.substring(0, 100));
+
+    const response = await fetch(
+      `https://api.elevenlabs.io/v1/text-to-speech/${ELEVENLABS_VOICE_ID}`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'xi-api-key': ELEVENLABS_API_KEY,
+          'Accept': 'audio/mpeg',
+        },
+        body: JSON.stringify({
+          text: cleanText,
+          model_id: 'eleven_turbo_v2_5',
+          voice_settings: {
+            stability: 0.4,
+            similarity_boost: 0.8,
+            style: 0.5,
+            use_speaker_boost: true,
+          },
+        }),
+      }
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('ElevenLabs error:', response.status, errorText);
+      return res.status(response.status).json({ 
+        error: 'ElevenLabs failed', 
+        details: errorText 
+      });
+    }
+
+    const audioBuffer = await response.arrayBuffer();
+    
+    res.set({
+      'Content-Type': 'audio/mpeg',
+      'Content-Length': audioBuffer.byteLength,
+      'Cache-Control': 'no-cache',
+    });
+    
+    res.send(Buffer.from(audioBuffer));
+
+  } catch (err) {
+    console.error('Speak error:', err.message);
+    res.status(500).json({ error: 'Could not generate speech' });
   }
 });
 
