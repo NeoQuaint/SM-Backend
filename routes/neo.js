@@ -308,6 +308,66 @@ router.get('/history', async (req, res) => {
 });
 
 // ==========================================
+// NEO VISION — Analyze student's handwritten work
+// ==========================================
+router.post('/vision', async (req, res) => {
+  try {
+    const { imageBase64, subject, message } = req.body;
+
+    if (!imageBase64) {
+      return res.status(400).json({ error: 'Image is required' });
+    }
+
+    consocd le.log('Neo vision called for subject:', subject);
+
+    const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: 'deepseek-chat',
+        messages: [
+          {
+            role: 'system',
+            content: 'You are Neo, a mathematics tutor marking a student\'s handwritten work. Read the image and compare the student\'s answer to the memorandum provided. Be strict but fair. Accept equivalent forms.'
+          },
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'text',
+                text: message || 'Please mark this student\'s work.'
+              },
+              {
+                type: 'image_url',
+                image_url: {
+                  url: `data:image/jpeg;base64,${imageBase64}`
+                }
+              }
+            ]
+          }
+        ],
+        temperature: 0.3,
+        max_tokens: 500,
+      }),
+    });
+
+    const data = await response.json();
+    const reply = data.choices?.[0]?.message?.content || '';
+
+    console.log('Vision response:', reply.substring(0, 200));
+
+    res.json({ reply });
+
+  } catch (err) {
+    console.error('Vision error:', err.message);
+    res.status(500).json({ error: 'Could not analyze image' });
+  }
+});
+
+// ==========================================
 // HEALTH CHECK
 // ==========================================
 router.get('/health', (req, res) => {
