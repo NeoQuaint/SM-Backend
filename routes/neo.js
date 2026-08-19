@@ -11,6 +11,7 @@ const openai = new OpenAI({
 // ElevenLabs Configuration
 const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY || 'sk_05461024a3455ae42808f82b94d65e39dd6e95c4e318183d';
 const ELEVENLABS_VOICE_ID = process.env.ELEVENLABS_VOICE_ID || 'cgSgspJ2msm6clMCkdW9'; // Jessica
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
 const performanceDescriptions = {
   'Bad': 'struggling significantly and needs foundational help',
@@ -32,7 +33,6 @@ router.post('/ask', async (req, res) => {
   req.userId = userId || 'test-user';
 
   try {
-    // Try to get user context from database
     let user = null;
     try {
       const userResult = await pool.query(
@@ -56,7 +56,6 @@ router.post('/ask', async (req, res) => {
       .map(([subj, lvl]) => `${subj}: ${lvl} (${performanceDescriptions[lvl] || 'unknown'})`)
       .join('\n');
 
-    // Get recent history
     let history = [];
     try {
       const historyResult = await pool.query(
@@ -71,7 +70,6 @@ router.post('/ask', async (req, res) => {
       console.log('Could not fetch history:', dbErr.message);
     }
 
-    // Use provided system prompt or build default
     const finalSystemPrompt = systemPrompt || `You are Neo, the AI tutor inside SmartClass — a South African edtech platform. You are warm, patient, and brilliant at teaching.
 
 ━━━━━━━━━━━━━━━━━━━━━━━
@@ -124,7 +122,6 @@ End with a check-in question unless it's a natural conclusion.`;
     const neoReply = completion.choices[0].message.content;
     const tokensUsed = completion.usage?.total_tokens || 0;
 
-    // Save to conversation history
     try {
       await pool.query(
         `INSERT INTO neo_conversations 
@@ -224,6 +221,210 @@ router.post('/speak', async (req, res) => {
 });
 
 // ==========================================
+// NEO VISION — OpenAI reads handwriting, DeepSeek teaches
+// ==========================================
+router.post('/vision', async (req, res) => {
+  try {
+    const { imageBase64, subject, message } = req.body;
+
+    if (!imageBase64) {
+      return res.status(400).json({ error: 'Image is required' });
+    }
+
+    console.log('=== NEO VISION STARTED ===');
+    console.log('Subject:', subject);
+    console.log('Image size:', imageBase64.length, 'characters');
+
+    let extractedText = '';
+    let usedOpenAI = false;
+
+    // Step 1: Try OpenAI to read handwriting
+    if (OPENAI_API_KEY) {
+      try {
+        console.log('Step 1: OpenAI reading handwriting...');
+        
+        const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${OPENAI_API_KEY}`,
+          },
+          body: JSON.stringify({
+            model: 'gpt-4o-mini',
+            messages: [
+              {
+                role: 'system',
+                content: 'You are a handwriting recognition system. Read the handwritten math in the image and extract ONLY what the student wrote. Return just the answer text, nothing else. If you cannot read it, respond exactly: UNCLEAR'
+              },
+              {
+                role: 'user',
+                content: [
+                  {
+                    type: 'text',
+                    text: 'Read the handwriting in this image. What did the student write?'
+                  },
+                  {
+                    type: 'image_url',
+                    image_url: {
+                      url: `data:image/jpeg;base64,${imageBase64}`
+                    }
+                  }
+                ]
+              }
+            ],
+            temperature: 0,
+            max_tokens: 100,
+          }),
+        });
+
+        const openaiData = await openaiResponse.json();
+        console.log('OpenAI raw response:', JSON.stringify(openaiData).substring(0, 500));
+        
+        extractedText = openaiData.choices?.[0]?.message?.content || '';
+        usedOpenAI = true;
+        console.log('OpenAI extracted:', extractedText);
+
+      } catch (openaiErr) {
+        console.error('OpenAI error:', openaiErr.message);
+        extractedText = '';
+      }
+    } else {
+      console.log('OPENAI_API_KEY not set. Skipping OpenAI.');
+    }
+
+    // Step 2: If OpenAI failed, try DeepSeek Vision
+    if (!extractedText || extractedText === 'UNCLEAR' || extractedText.includes('UNCLEAR')) {
+      try {
+        console.log('Step 2: Falling back to DeepSeek Vision...');
+        
+        const deepseekReadResponse = await fetch('https://api.deepseek.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY}`,
+          },
+          body: JSON.stringify({
+            model: 'deepseek-chat',
+            messages: [
+              {
+                role: 'user',
+                content: [
+                  {
+                    type: 'text',
+                    text: 'Read the handwriting in this image. Extract ONLY what the student wrote. If you cannot read it, respond: UNCLEAR'
+                  },
+                  {
+                    type: 'image_url',
+                    image_url: {
+                      url: `data:image/jpeg;base64,${imageBase64}`
+                    }
+                  }
+                ]
+              }
+            ],
+            temperature: 0,
+            max_tokens: 100,
+          }),
+        });
+
+        const deepseekReadData = await deepseekReadResponse.json();
+        console.log('DeepSeek read raw:', JSON.stringify(deepseekReadData).substring(0, 500));
+        
+        extractedText = deepseekReadData.choices?.[0]?.message?.content || '';
+        console.log('DeepSeek extracted:', extractedText);
+
+      } catch (deepseekReadErr) {
+        console.error('DeepSeek read error:', deepseekReadErr.message);
+      }
+    }
+
+    // Step 3: If still no text, return UNCLEAR
+    if (!extractedText || extractedText === 'UNCLEAR' || extractedText.includes('UNCLEAR')) {
+      console.log('Could not read handwriting. Returning UNCLEAR.');
+      return res.json({ reply: 'UNCLEAR: Cannot read handwriting' });
+    }
+
+    console.log('Extracted answer:', extractedText);
+    console.log('Used OpenAI:', usedOpenAI);
+
+    // Step 4: DeepSeek compares and teaches
+    console.log('Step 4: DeepSeek teaching...');
+    
+    try {
+      const deepseekResponse = await fetch('https://api.deepseek.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: 'deepseek-chat',
+          messages: [
+            {
+              role: 'system',
+              content: 'You are Neo, a patient mathematics tutor. Compare the student\'s answer to the memorandum and respond in the exact format requested.'
+            },
+            {
+              role: 'user',
+              content: `${message}\n\nSTUDENT'S EXTRACTED ANSWER: ${extractedText}\n\nCompare this to the memorandum and respond accordingly.`
+            }
+          ],
+          temperature: 0.7,
+          max_tokens: 500,
+        }),
+      });
+
+      const deepseekData = await deepseekResponse.json();
+      console.log('DeepSeek teaching raw:', JSON.stringify(deepseekData).substring(0, 500));
+      
+      const finalReply = deepseekData.choices?.[0]?.message?.content || '';
+      console.log('DeepSeek final reply:', finalReply);
+
+      if (!finalReply || !finalReply.trim()) {
+        console.log('DeepSeek returned empty. Using basic comparison...');
+        
+        // Basic comparison fallback
+        const extracted = extractedText.toLowerCase().trim();
+        const correctAnswerMatch = message.match(/Correct answer: ([^\n]+)/);
+        const correctAnswer = correctAnswerMatch ? correctAnswerMatch[1].toLowerCase().trim() : '';
+        
+        // Check if the answer matches (simple check)
+        const correctSimplified = correctAnswer
+          .replace(/or/gi, '|')
+          .replace(/y\s*=\s*/g, '')
+          .replace(/k\(x\)\s*=\s*/g, '')
+          .trim();
+        
+        const extractedSimplified = extracted
+          .replace(/y\s*=\s*/g, '')
+          .replace(/k\(x\)\s*=\s*/g, '')
+          .trim();
+        
+        if (correctSimplified.includes(extractedSimplified) || extractedSimplified.includes(correctSimplified)) {
+          return res.json({ reply: 'CORRECT: Well done!' });
+        } else {
+          return res.json({
+            reply: `INCORRECT: You wrote "${extractedText}" but the correct answer is "${correctAnswer}"
+MISTAKE: Your answer doesn't match the memorandum
+TEACHING: Let's go through this step by step. Look at the graph and try again.`
+          });
+        }
+      }
+
+      res.json({ reply: finalReply });
+
+    } catch (deepseekErr) {
+      console.error('DeepSeek teaching error:', deepseekErr.message);
+      res.status(500).json({ error: 'DeepSeek failed: ' + deepseekErr.message });
+    }
+
+  } catch (err) {
+    console.error('Vision error:', err.message);
+    res.status(500).json({ error: 'Could not analyze image: ' + err.message });
+  }
+});
+
+// ==========================================
 // NEO MEMORY — Store and retrieve student context
 // ==========================================
 
@@ -304,162 +505,6 @@ router.get('/history', async (req, res) => {
   } catch (err) {
     console.error('History error:', err);
     res.status(500).json({ error: 'Could not fetch conversation history' });
-  }
-});
-
-// ==========================================
-// NEO VISION — Analyze student's handwritten work
-// ==========================================
-router.post('/vision', async (req, res) => {
-  try {
-    const { imageBase64, subject, message } = req.body;
-
-    if (!imageBase64) {
-      return res.status(400).json({ error: 'Image is required' });
-    }
-
-    console.log('Neo vision called for subject:', subject);
-
-    const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: 'deepseek-chat',
-        messages: [
-          {
-            role: 'system',
-            content: 'You are Neo, a mathematics tutor marking a student\'s handwritten work. Read the image and compare the student\'s answer to the memorandum provided. Be strict but fair. Accept equivalent forms.'
-          },
-          {
-            role: 'user',
-            content: [
-              {
-                type: 'text',
-                text: message || 'Please mark this student\'s work.'
-              },
-              {
-                type: 'image_url',
-                image_url: {
-                  url: `data:image/jpeg;base64,${imageBase64}`
-                }
-              }
-            ]
-          }
-        ],
-        temperature: 0.3,
-        max_tokens: 500,
-      }),
-    });
-
-    const data = await response.json();
-    const reply = data.choices?.[0]?.message?.content || '';
-
-    console.log('Vision response:', reply.substring(0, 200));
-
-    res.json({ reply });
-
-  } catch (err) {
-    console.error('Vision error:', err.message);
-    res.status(500).json({ error: 'Could not analyze image' });
-  }
-});
-
-// ==========================================
-// NEO VISION — OpenAI reads handwriting, DeepSeek teaches
-// ==========================================
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-
-router.post('/vision', async (req, res) => {
-  try {
-    const { imageBase64, subject, message } = req.body;
-
-    if (!imageBase64) {
-      return res.status(400).json({ error: 'Image is required' });
-    }
-
-    console.log('Neo vision: OpenAI is reading handwriting...');
-
-    // Step 1: OpenAI reads the handwriting
-    const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o-mini',
-        messages: [
-          {
-            role: 'system',
-            content: 'You are a handwriting recognition system. Read the handwritten math in the image and extract ONLY what the student wrote. Return just the answer text, nothing else. If you cannot read it, respond exactly: UNCLEAR'
-          },
-          {
-            role: 'user',
-            content: [
-              {
-                type: 'text',
-                text: 'Read the handwriting in this image. What did the student write?'
-              },
-              {
-                type: 'image_url',
-                image_url: {
-                  url: `data:image/jpeg;base64,${imageBase64}`
-                }
-              }
-            ]
-          }
-        ],
-        temperature: 0,
-        max_tokens: 100,
-      }),
-    });
-
-    const openaiData = await openaiResponse.json();
-    const extractedText = openaiData.choices?.[0]?.message?.content || 'UNCLEAR';
-    
-    console.log('OpenAI extracted:', extractedText);
-
-    if (extractedText === 'UNCLEAR' || extractedText.includes('UNCLEAR')) {
-      return res.json({ reply: 'UNCLEAR: Cannot read handwriting' });
-    }
-
-    // Step 2: DeepSeek compares extracted text to memorandum and teaches
-    const deepseekResponse = await fetch('https://api.deepseek.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: 'deepseek-chat',
-        messages: [
-          {
-            role: 'system',
-            content: 'You are Neo, a patient mathematics tutor. Compare the student\'s answer to the memorandum and respond with CORRECT or INCORRECT + teaching.'
-          },
-          {
-            role: 'user',
-            content: `${message}\n\nSTUDENT'S EXTRACTED ANSWER: ${extractedText}\n\nCompare this to the memorandum and respond accordingly.`
-          }
-        ],
-        temperature: 0.7,
-        max_tokens: 500,
-      }),
-    });
-
-    const deepseekData = await deepseekResponse.json();
-    const finalReply = deepseekData.choices?.[0]?.message?.content || '';
-
-    console.log('DeepSeek teaching response:', finalReply.substring(0, 200));
-
-    res.json({ reply: finalReply });
-
-  } catch (err) {
-    console.error('Vision error:', err.message);
-    res.status(500).json({ error: 'Could not analyze image' });
   }
 });
 
