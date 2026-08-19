@@ -368,6 +368,102 @@ router.post('/vision', async (req, res) => {
 });
 
 // ==========================================
+// NEO VISION — OpenAI reads handwriting, DeepSeek teaches
+// ==========================================
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+
+router.post('/vision', async (req, res) => {
+  try {
+    const { imageBase64, subject, message } = req.body;
+
+    if (!imageBase64) {
+      return res.status(400).json({ error: 'Image is required' });
+    }
+
+    console.log('Neo vision: OpenAI is reading handwriting...');
+
+    // Step 1: OpenAI reads the handwriting
+    const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'system',
+            content: 'You are a handwriting recognition system. Read the handwritten math in the image and extract ONLY what the student wrote. Return just the answer text, nothing else. If you cannot read it, respond exactly: UNCLEAR'
+          },
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'text',
+                text: 'Read the handwriting in this image. What did the student write?'
+              },
+              {
+                type: 'image_url',
+                image_url: {
+                  url: `data:image/jpeg;base64,${imageBase64}`
+                }
+              }
+            ]
+          }
+        ],
+        temperature: 0,
+        max_tokens: 100,
+      }),
+    });
+
+    const openaiData = await openaiResponse.json();
+    const extractedText = openaiData.choices?.[0]?.message?.content || 'UNCLEAR';
+    
+    console.log('OpenAI extracted:', extractedText);
+
+    if (extractedText === 'UNCLEAR' || extractedText.includes('UNCLEAR')) {
+      return res.json({ reply: 'UNCLEAR: Cannot read handwriting' });
+    }
+
+    // Step 2: DeepSeek compares extracted text to memorandum and teaches
+    const deepseekResponse = await fetch('https://api.deepseek.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: 'deepseek-chat',
+        messages: [
+          {
+            role: 'system',
+            content: 'You are Neo, a patient mathematics tutor. Compare the student\'s answer to the memorandum and respond with CORRECT or INCORRECT + teaching.'
+          },
+          {
+            role: 'user',
+            content: `${message}\n\nSTUDENT'S EXTRACTED ANSWER: ${extractedText}\n\nCompare this to the memorandum and respond accordingly.`
+          }
+        ],
+        temperature: 0.7,
+        max_tokens: 500,
+      }),
+    });
+
+    const deepseekData = await deepseekResponse.json();
+    const finalReply = deepseekData.choices?.[0]?.message?.content || '';
+
+    console.log('DeepSeek teaching response:', finalReply.substring(0, 200));
+
+    res.json({ reply: finalReply });
+
+  } catch (err) {
+    console.error('Vision error:', err.message);
+    res.status(500).json({ error: 'Could not analyze image' });
+  }
+});
+
+// ==========================================
 // HEALTH CHECK
 // ==========================================
 router.get('/health', (req, res) => {
