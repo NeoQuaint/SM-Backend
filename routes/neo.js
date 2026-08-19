@@ -318,7 +318,7 @@ router.post('/vision', async (req, res) => {
       return res.status(400).json({ error: 'Image is required' });
     }
 
-    consocd le.log('Neo vision called for subject:', subject);
+    console.log('Neo vision called for subject:', subject);
 
     const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
       method: 'POST',
