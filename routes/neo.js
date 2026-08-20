@@ -21,7 +21,7 @@ const performanceDescriptions = {
 };
 
 // ==========================================
-// ASK NEO (Text)
+// ASK NEO (Text) - 7th Grade Teaching Style
 // ==========================================
 router.post('/ask', async (req, res) => {
   const { message, subject, roomId, userId, systemPrompt, context } = req.body;
@@ -70,36 +70,42 @@ router.post('/ask', async (req, res) => {
       console.log('Could not fetch history:', dbErr.message);
     }
 
-    const finalSystemPrompt = systemPrompt || `You are Neo, the AI tutor inside SmartClass — a South African edtech platform. You are warm, patient, and brilliant at teaching.
+    const finalSystemPrompt = systemPrompt || `You are Neo, the AI tutor inside SmartClass — a South African edtech platform.
+
+YOU ARE TEACHING STUDENTS WHO GET 12/100 IN MATHS. They are NOT dumb — they just never had someone explain it simply enough.
 
 ━━━━━━━━━━━━━━━━━━━━━━━
-STUDENT PROFILE
-━━━━━━━━━━━━━━━━━━━━━━━
-Name: ${user?.full_name || 'Student'}
-Education Level: ${level}
-Grade: ${grade ? `Grade ${grade}` : 'N/A'}
-${user?.university_level ? `University Level: ${user.university_level}` : ''}
-Subjects: ${userSubjects.join(', ') || 'Various'}
-Learning Preference: ${user?.learning_time || 'Flexible'}
-
-SUBJECT PERFORMANCE:
-${performanceContext || 'No assessment data yet'}
-
-CURRENT FOCUS: ${currentSubject}
-
-━━━━━━━━━━━━━━━━━━━━━━━
-TEACHING RULES (Follow strictly)
+TEACHING RULES (Follow STRICTLY)
 ━━━━━━━━━━━━━━━━━━━━━━━
 
-1. TEACH AT THE RIGHT LEVEL
-2. BREAK EVERYTHING INTO STEPS
-3. BE A REAL TEACHER — celebrate, encourage, check understanding
-4. SOUTH AFRICAN CONTEXT — rands, local examples, CAPS awareness
-5. NEVER just give the answer — guide discovery
-6. Keep responses 3-4 paragraphs max unless asked for more
-7. Sound human, warm, and genuinely invested
+1. EXPLAIN LIKE THEY'RE IN 7TH GRADE
+   - Use the SIMPLEST words possible
+   - Use everyday analogies (cookies, stairs, temperature, money, soccer)
+   - One idea per sentence
+   - Short sentences
 
-End with a check-in question unless it's a natural conclusion.`;
+2. BREAK EVERYTHING INTO TINY NUMBERED STEPS
+   - Step 1, Step 2, Step 3...
+   - Never skip steps
+   - Assume they know NOTHING
+
+3. BE WARM AND ENCOURAGING
+   - Celebrate small wins
+   - Never judge
+   - "You've got this!" energy
+
+4. SOUTH AFRICAN CONTEXT
+   - Use rands, local examples
+   - CAPS awareness
+
+5. NEVER just give the answer
+   - Guide them to discover it
+   - Ask "What do YOU think?"
+
+6. Keep it SHORT — 4-5 sentences max per step
+7. Sound human, warm, genuinely invested
+
+End with an encouraging check-in question.`;
 
     const messages = [
       { role: 'system', content: finalSystemPrompt },
@@ -221,7 +227,7 @@ router.post('/speak', async (req, res) => {
 });
 
 // ==========================================
-// NEO VISION — OpenAI reads handwriting, DeepSeek teaches
+// NEO VISION — OpenAI reads, DeepSeek teaches (7th Grade Style)
 // ==========================================
 router.post('/vision', async (req, res) => {
   try {
@@ -233,12 +239,11 @@ router.post('/vision', async (req, res) => {
 
     console.log('=== NEO VISION STARTED ===');
     console.log('Subject:', subject);
-    console.log('Image size:', imageBase64.length, 'characters');
 
     let extractedText = '';
     let usedOpenAI = false;
 
-    // Step 1: Try OpenAI to read handwriting
+    // Step 1: OpenAI reads handwriting
     if (OPENAI_API_KEY) {
       try {
         console.log('Step 1: OpenAI reading handwriting...');
@@ -278,8 +283,6 @@ router.post('/vision', async (req, res) => {
         });
 
         const openaiData = await openaiResponse.json();
-        console.log('OpenAI raw response:', JSON.stringify(openaiData).substring(0, 500));
-        
         extractedText = openaiData.choices?.[0]?.message?.content || '';
         usedOpenAI = true;
         console.log('OpenAI extracted:', extractedText);
@@ -288,11 +291,9 @@ router.post('/vision', async (req, res) => {
         console.error('OpenAI error:', openaiErr.message);
         extractedText = '';
       }
-    } else {
-      console.log('OPENAI_API_KEY not set. Skipping OpenAI.');
     }
 
-    // Step 2: If OpenAI failed, try DeepSeek Vision
+    // Step 2: DeepSeek Vision fallback
     if (!extractedText || extractedText === 'UNCLEAR' || extractedText.includes('UNCLEAR')) {
       try {
         console.log('Step 2: Falling back to DeepSeek Vision...');
@@ -328,8 +329,6 @@ router.post('/vision', async (req, res) => {
         });
 
         const deepseekReadData = await deepseekReadResponse.json();
-        console.log('DeepSeek read raw:', JSON.stringify(deepseekReadData).substring(0, 500));
-        
         extractedText = deepseekReadData.choices?.[0]?.message?.content || '';
         console.log('DeepSeek extracted:', extractedText);
 
@@ -338,17 +337,16 @@ router.post('/vision', async (req, res) => {
       }
     }
 
-    // Step 3: If still no text, return UNCLEAR
+    // Step 3: Return UNCLEAR if still no text
     if (!extractedText || extractedText === 'UNCLEAR' || extractedText.includes('UNCLEAR')) {
       console.log('Could not read handwriting. Returning UNCLEAR.');
       return res.json({ reply: 'UNCLEAR: Cannot read handwriting' });
     }
 
     console.log('Extracted answer:', extractedText);
-    console.log('Used OpenAI:', usedOpenAI);
 
-    // Step 4: DeepSeek compares and teaches
-    console.log('Step 4: DeepSeek teaching...');
+    // Step 4: DeepSeek teaches like a 7th grader
+    console.log('Step 4: DeepSeek teaching (7th grade style)...');
     
     try {
       const deepseekResponse = await fetch('https://api.deepseek.com/v1/chat/completions', {
@@ -362,33 +360,47 @@ router.post('/vision', async (req, res) => {
           messages: [
             {
               role: 'system',
-              content: 'You are Neo, a patient mathematics tutor. Compare the student\'s answer to the memorandum and respond in the exact format requested.'
+              content: `You are Neo, a warm and patient mathematics tutor for South African students who get 12/100 in maths. They are NOT dumb — they just never had someone explain it simply.
+
+EXPLAIN LIKE YOU'RE TALKING TO A 7TH GRADER:
+- Use the SIMPLEST words possible
+- Use everyday analogies (cookies, stairs, temperature, money, soccer)
+- One idea per sentence
+- Break everything into TINY numbered steps (Step 1, Step 2, Step 3...)
+- NEVER assume they know anything
+- Be encouraging: "You've got this!"
+
+RESPOND IN THIS FORMAT:
+
+If CORRECT:
+"CORRECT: [warm, brief praise]"
+
+If WRONG:
+"INCORRECT: [what they wrote vs correct answer in simple words]
+MISTAKE: [explain the mistake in ONE simple sentence]
+TEACHING: [explain the solution like talking to a 7th grader. Use analogies. Number each step. Be encouraging.]"`
             },
             {
               role: 'user',
-              content: `${message}\n\nSTUDENT'S EXTRACTED ANSWER: ${extractedText}\n\nCompare this to the memorandum and respond accordingly.`
+              content: `${message}\n\nSTUDENT'S EXTRACTED ANSWER: ${extractedText}\n\nCompare this to the memorandum and explain like you're teaching a 7th grader who gets 12/100 in maths. Use analogies and tiny steps.`
             }
           ],
           temperature: 0.7,
-          max_tokens: 500,
+          max_tokens: 800,
         }),
       });
 
       const deepseekData = await deepseekResponse.json();
-      console.log('DeepSeek teaching raw:', JSON.stringify(deepseekData).substring(0, 500));
-      
       const finalReply = deepseekData.choices?.[0]?.message?.content || '';
       console.log('DeepSeek final reply:', finalReply);
 
       if (!finalReply || !finalReply.trim()) {
         console.log('DeepSeek returned empty. Using basic comparison...');
         
-        // Basic comparison fallback
         const extracted = extractedText.toLowerCase().trim();
         const correctAnswerMatch = message.match(/Correct answer: ([^\n]+)/);
         const correctAnswer = correctAnswerMatch ? correctAnswerMatch[1].toLowerCase().trim() : '';
         
-        // Check if the answer matches (simple check)
         const correctSimplified = correctAnswer
           .replace(/or/gi, '|')
           .replace(/y\s*=\s*/g, '')
@@ -401,12 +413,12 @@ router.post('/vision', async (req, res) => {
           .trim();
         
         if (correctSimplified.includes(extractedSimplified) || extractedSimplified.includes(correctSimplified)) {
-          return res.json({ reply: 'CORRECT: Well done!' });
+          return res.json({ reply: 'CORRECT: Well done! You got it right!' });
         } else {
           return res.json({
             reply: `INCORRECT: You wrote "${extractedText}" but the correct answer is "${correctAnswer}"
-MISTAKE: Your answer doesn't match the memorandum
-TEACHING: Let's go through this step by step. Look at the graph and try again.`
+MISTAKE: Your answer doesn't match what we need
+TEACHING: Step 1: Look at the graph. Step 2: Find where the dotted line sits on the y-axis. Step 3: That number is your answer. You've got this!`
           });
         }
       }
