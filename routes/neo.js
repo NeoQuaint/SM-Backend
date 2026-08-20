@@ -8,10 +8,9 @@ const openai = new OpenAI({
   baseURL: 'https://api.deepseek.com/v1',
 });
 
-// ElevenLabs Configuration
-const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY || 'sk_ba09732f52a6b3b2c4287daeb995841cf36e4180b8c06f2a';
-const ELEVENLABS_VOICE_ID = process.env.ELEVENLABS_VOICE_ID || 'cgSgspJ2msm6clMCkdW9'; // Jessica
+// OpenAI TTS Configuration
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const OPENAI_TTS_VOICE = 'nova'; // Warm female voice
 
 const performanceDescriptions = {
   'Bad': 'struggling significantly and needs foundational help',
@@ -161,7 +160,7 @@ End with an encouraging check-in question.`;
 });
 
 // ==========================================
-// NEO SPEAK — ElevenLabs Text-to-Speech Proxy
+// NEO SPEAK — OpenAI TTS (nova voice)
 // ==========================================
 router.post('/speak', async (req, res) => {
   try {
@@ -171,45 +170,37 @@ router.post('/speak', async (req, res) => {
       return res.status(400).json({ error: 'Text is required' });
     }
 
-    // Truncate text to 500 characters for ElevenLabs free plan
+    // Truncate text to 400 characters for cost efficiency
     let cleanText = text.replace(/[^a-zA-Z0-9\s.,!?()=+\-']/g, '');
-    if (cleanText.length > 500) {
-      cleanText = cleanText.substring(0, 500);
+    if (cleanText.length > 400) {
+      cleanText = cleanText.substring(0, 400);
     }
 
     if (!cleanText.trim()) {
       return res.status(400).json({ error: 'No valid text to speak' });
     }
 
-    console.log('Neo speaking:', cleanText.substring(0, 100));
+    console.log('Neo speaking (OpenAI TTS):', cleanText.substring(0, 100));
 
-    const response = await fetch(
-      `https://api.elevenlabs.io/v1/text-to-speech/${ELEVENLABS_VOICE_ID}`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'xi-api-key': ELEVENLABS_API_KEY,
-          'Accept': 'audio/mpeg',
-        },
-        body: JSON.stringify({
-          text: cleanText,
-          model_id: 'eleven_turbo_v2_5',
-          voice_settings: {
-            stability: 0.4,
-            similarity_boost: 0.8,
-            style: 0.5,
-            use_speaker_boost: true,
-          },
-        }),
-      }
-    );
+    const response = await fetch('https://api.openai.com/v1/audio/speech', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: 'tts-1',
+        voice: OPENAI_TTS_VOICE,
+        input: cleanText,
+        speed: 1.0,
+      }),
+    });
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('ElevenLabs error:', response.status, errorText);
+      console.error('OpenAI TTS error:', response.status, errorText);
       return res.status(response.status).json({ 
-        error: 'ElevenLabs failed', 
+        error: 'OpenAI TTS failed', 
         details: errorText 
       });
     }
