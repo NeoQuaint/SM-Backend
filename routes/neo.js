@@ -10,7 +10,8 @@ const openai = new OpenAI({
 
 // OpenAI TTS Configuration
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const OPENAI_TTS_VOICE = 'nova'; // Warm female voice
+const OPENAI_TTS_VOICE = 'shimmer'; // Brighter, more energetic female voice
+const OPENAI_TTS_SPEED = 1.1; // Slightly faster for energy
 
 const performanceDescriptions = {
   'Bad': 'struggling significantly and needs foundational help',
@@ -160,7 +161,7 @@ End with an encouraging check-in question.`;
 });
 
 // ==========================================
-// NEO SPEAK — OpenAI TTS (nova voice)
+// NEO SPEAK — OpenAI TTS (shimmer voice)
 // ==========================================
 router.post('/speak', async (req, res) => {
   try {
@@ -180,7 +181,7 @@ router.post('/speak', async (req, res) => {
       return res.status(400).json({ error: 'No valid text to speak' });
     }
 
-    console.log('Neo speaking (OpenAI TTS):', cleanText.substring(0, 100));
+    console.log('Neo speaking (OpenAI TTS - shimmer):', cleanText.substring(0, 100));
 
     const response = await fetch('https://api.openai.com/v1/audio/speech', {
       method: 'POST',
@@ -192,7 +193,7 @@ router.post('/speak', async (req, res) => {
         model: 'tts-1',
         voice: OPENAI_TTS_VOICE,
         input: cleanText,
-        speed: 1.0,
+        speed: OPENAI_TTS_SPEED,
       }),
     });
 
