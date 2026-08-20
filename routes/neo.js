@@ -9,7 +9,7 @@ const openai = new OpenAI({
 });
 
 // ElevenLabs Configuration
-const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY || 'sk_05461024a3455ae42808f82b94d65e39dd6e95c4e318183d';
+const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY || 'sk_ba09732f52a6b3b2c4287daeb995841cf36e4180b8c06f2a';
 const ELEVENLABS_VOICE_ID = process.env.ELEVENLABS_VOICE_ID || 'cgSgspJ2msm6clMCkdW9'; // Jessica
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
@@ -171,7 +171,11 @@ router.post('/speak', async (req, res) => {
       return res.status(400).json({ error: 'Text is required' });
     }
 
-    const cleanText = text.replace(/[^a-zA-Z0-9\s.,!?()=+\-']/g, '');
+    // Truncate text to 500 characters for ElevenLabs free plan
+    let cleanText = text.replace(/[^a-zA-Z0-9\s.,!?()=+\-']/g, '');
+    if (cleanText.length > 500) {
+      cleanText = cleanText.substring(0, 500);
+    }
 
     if (!cleanText.trim()) {
       return res.status(400).json({ error: 'No valid text to speak' });
