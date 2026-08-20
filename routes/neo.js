@@ -21,7 +21,7 @@ const performanceDescriptions = {
 };
 
 // ==========================================
-// ASK NEO (Text) - Short Teaching Style
+// ASK NEO (Text) - Short with Analogies
 // ==========================================
 router.post('/ask', async (req, res) => {
   const { message, subject, roomId, userId, systemPrompt, context } = req.body;
@@ -52,44 +52,26 @@ router.post('/ask', async (req, res) => {
     const performance = user?.performance || {};
     const currentSubject = subject || userSubjects[0] || 'general';
 
-    const performanceContext = Object.entries(performance)
-      .map(([subj, lvl]) => `${subj}: ${lvl} (${performanceDescriptions[lvl] || 'unknown'})`)
-      .join('\n');
-
-    let history = [];
-    try {
-      const historyResult = await pool.query(
-        `SELECT message, response FROM neo_conversations 
-         WHERE user_id = $1 
-         ORDER BY created_at DESC 
-         LIMIT 6`,
-        [req.userId]
-      );
-      history = historyResult.rows.reverse();
-    } catch (dbErr) {
-      console.log('Could not fetch history:', dbErr.message);
-    }
-
     const finalSystemPrompt = systemPrompt || `You are Neo, the AI tutor inside SmartClass — a South African edtech platform.
 
 TEACHING RULES:
 1. MAX 3 SENTENCES per explanation
 2. MAX 2-3 STEPS
-3. Get to the point IMMEDIATELY
-4. One short analogy MAX ("like stairs", "like a smile")
+3. Use analogies with PEOPLE, CARS, HILLS, BALLS, STAIRS, MONEY
+4. Explain formulas in plain language
 5. Be warm but BRIEF
 6. End with "Try again!"
 
-Sound human, warm, and genuinely invested.`;
+FORMULA ANALOGIES:
+- Gradient: "How steep the hill is. Two friends on a hill — top friend minus bottom friend."
+- Asymptote: "A car driving toward a wall that it never hits."
+- Turning point: "Throw a ball up. The highest point before it falls."
+- X-intercept: "Where the graph crosses the road (x-axis)."
+- Y-intercept: "Where the graph starts on the y-axis."`;
 
     const messages = [
       { role: 'system', content: finalSystemPrompt },
     ];
-
-    for (const h of history) {
-      messages.push({ role: 'user', content: h.message });
-      messages.push({ role: 'assistant', content: h.response });
-    }
 
     messages.push({ role: 'user', content: message });
 
@@ -97,30 +79,11 @@ Sound human, warm, and genuinely invested.`;
       model: 'deepseek-chat',
       messages: messages,
       temperature: 0.7,
-      max_tokens: 200,
+      max_tokens: 150,
     });
 
     const neoReply = completion.choices[0].message.content;
     const tokensUsed = completion.usage?.total_tokens || 0;
-
-    try {
-      await pool.query(
-        `INSERT INTO neo_conversations 
-         (user_id, room_id, message, response, context, tokens_used, model) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [
-          req.userId,
-          roomId || null,
-          message,
-          neoReply,
-          JSON.stringify(context || { grade, level, subject: currentSubject, performance }),
-          tokensUsed,
-          'deepseek-chat'
-        ]
-      );
-    } catch (dbErr) {
-      console.log('Could not save conversation:', dbErr.message);
-    }
 
     res.json({ 
       reply: neoReply,
@@ -136,7 +99,7 @@ Sound human, warm, and genuinely invested.`;
 });
 
 // ==========================================
-// NEO SPEAK — ElevenLabs (Jessica)
+// NEO SPEAK — ElevenLabs (Jessica) - CREDIT SAVING
 // ==========================================
 router.post('/speak', async (req, res) => {
   try {
@@ -146,9 +109,10 @@ router.post('/speak', async (req, res) => {
       return res.status(400).json({ error: 'Text is required' });
     }
 
+    // STRICTER truncation - saves credits
     let cleanText = text.replace(/[^a-zA-Z0-9\s.,!?()=+\-']/g, '');
-    if (cleanText.length > 300) {
-      cleanText = cleanText.substring(0, 300);
+    if (cleanText.length > 200) {
+      cleanText = cleanText.substring(0, 200);
     }
 
     if (!cleanText.trim()) {
@@ -168,11 +132,11 @@ router.post('/speak', async (req, res) => {
         },
         body: JSON.stringify({
           text: cleanText,
-          model_id: 'eleven_turbo_v2_5',
+          model_id: 'eleven_turbo_v2_5', // Turbo = cheaper
           voice_settings: {
             stability: 0.4,
             similarity_boost: 0.8,
-            style: 0.5,
+            style: 0.3, // Lower style = cheaper
             use_speaker_boost: true,
           },
         }),
@@ -216,12 +180,10 @@ router.post('/vision', async (req, res) => {
     }
 
     console.log('=== NEO VISION STARTED ===');
-    console.log('Subject:', subject);
 
     let extractedText = '';
-    let usedOpenAI = false;
 
-    // Step 1: OpenAI reads handwriting
+    // Step 1: OpenAI reads handwriting (cheap - max 30 tokens)
     if (OPENAI_API_KEY) {
       try {
         console.log('Step 1: OpenAI reading handwriting...');
@@ -237,14 +199,14 @@ router.post('/vision', async (req, res) => {
             messages: [
               {
                 role: 'system',
-                content: 'You are a handwriting recognition system. Read the handwritten math in the image and extract ONLY what the student wrote. Return just the answer text, nothing else. If you cannot read it, respond exactly: UNCLEAR'
+                content: 'Read the handwritten math. Extract ONLY the answer. If unreadable, respond: UNCLEAR'
               },
               {
                 role: 'user',
                 content: [
                   {
                     type: 'text',
-                    text: 'Read the handwriting in this image. What did the student write?'
+                    text: 'What did the student write?'
                   },
                   {
                     type: 'image_url',
@@ -256,13 +218,12 @@ router.post('/vision', async (req, res) => {
               }
             ],
             temperature: 0,
-            max_tokens: 50,
+            max_tokens: 30,
           }),
         });
 
         const openaiData = await openaiResponse.json();
         extractedText = openaiData.choices?.[0]?.message?.content || '';
-        usedOpenAI = true;
         console.log('OpenAI extracted:', extractedText);
 
       } catch (openaiErr) {
@@ -271,10 +232,10 @@ router.post('/vision', async (req, res) => {
       }
     }
 
-    // Step 2: DeepSeek Vision fallback
+    // Step 2: DeepSeek Vision fallback (free)
     if (!extractedText || extractedText === 'UNCLEAR' || extractedText.includes('UNCLEAR')) {
       try {
-        console.log('Step 2: Falling back to DeepSeek Vision...');
+        console.log('Step 2: DeepSeek Vision fallback...');
         
         const deepseekReadResponse = await fetch('https://api.deepseek.com/v1/chat/completions', {
           method: 'POST',
@@ -290,7 +251,7 @@ router.post('/vision', async (req, res) => {
                 content: [
                   {
                     type: 'text',
-                    text: 'Read the handwriting in this image. Extract ONLY what the student wrote. If you cannot read it, respond: UNCLEAR'
+                    text: 'Read the handwriting. Extract ONLY the answer. If unreadable, respond: UNCLEAR'
                   },
                   {
                     type: 'image_url',
@@ -302,7 +263,7 @@ router.post('/vision', async (req, res) => {
               }
             ],
             temperature: 0,
-            max_tokens: 50,
+            max_tokens: 30,
           }),
         });
 
@@ -315,17 +276,14 @@ router.post('/vision', async (req, res) => {
       }
     }
 
-    // Step 3: Return UNCLEAR if still no text
+    // Step 3: Return UNCLEAR
     if (!extractedText || extractedText === 'UNCLEAR' || extractedText.includes('UNCLEAR')) {
-      console.log('Could not read handwriting. Returning UNCLEAR.');
       return res.json({ reply: 'UNCLEAR: Cannot read handwriting' });
     }
 
     console.log('Extracted answer:', extractedText);
 
-    // Step 4: DeepSeek teaches SHORT
-    console.log('Step 4: DeepSeek teaching (short style)...');
-    
+    // Step 4: DeepSeek teaches SHORT with analogies
     try {
       const deepseekResponse = await fetch('https://api.deepseek.com/v1/chat/completions', {
         method: 'POST',
@@ -341,31 +299,37 @@ router.post('/vision', async (req, res) => {
               content: `You are Neo, a maths tutor for South African students with SHORT ATTENTION SPANS who get 12/100.
 
 TEACHING RULES:
-1. MAX 3 SENTENCES per explanation
-2. MAX 2-3 STEPS
-3. Get to the point IMMEDIATELY
-4. One short analogy MAX ("like stairs", "like a smile")
-5. Be warm but BRIEF
-6. End with "Try again!"
+1. MAX 3 SENTENCES total
+2. Use analogies: CARS, HILLS, BALLS, STAIRS, MONEY, FRIENDS
+3. Explain formulas in plain language
+4. Be warm but BRIEF
+5. End with "Try again!"
+
+FORMULA ANALOGIES:
+- Gradient: "How steep the hill is. Top friend minus bottom friend."
+- Asymptote: "A car driving toward a wall it never hits."
+- Turning point: "Throw a ball up. Highest point before it falls."
+- X-intercept: "Where the graph crosses the road."
+- Y-intercept: "Where the graph starts on the y-axis."
 
 RESPOND IN THIS FORMAT:
 
 If CORRECT:
-"CORRECT: [3 words max, like 'Yes! You got it!']"
+"CORRECT: [3 words max]"
 
 If WRONG:
 "INCORRECT: [what they wrote vs correct]
-WHY: [ONE sentence]
-FIX: [ONE sentence how to fix it]
-AGAIN: [encouragement to try again]"`
+WHY: [ONE sentence with analogy]
+FIX: [ONE sentence]
+AGAIN: [Try again!]"`
             },
             {
               role: 'user',
-              content: `${message}\n\nSTUDENT'S EXTRACTED ANSWER: ${extractedText}\n\nCompare and respond SHORT. Max 3 sentences.`
+              content: `${message}\n\nSTUDENT'S EXTRACTED ANSWER: ${extractedText}\n\nRespond SHORT. Max 3 sentences. Use analogies.`
             }
           ],
           temperature: 0.7,
-          max_tokens: 150,
+          max_tokens: 120,
         }),
       });
 
@@ -374,30 +338,18 @@ AGAIN: [encouragement to try again]"`
       console.log('DeepSeek final reply:', finalReply);
 
       if (!finalReply || !finalReply.trim()) {
-        console.log('DeepSeek returned empty. Using basic comparison...');
-        
+        // Basic fallback
         const extracted = extractedText.toLowerCase().trim();
         const correctAnswerMatch = message.match(/Correct answer: ([^\n]+)/);
         const correctAnswer = correctAnswerMatch ? correctAnswerMatch[1].toLowerCase().trim() : '';
         
-        const correctSimplified = correctAnswer
-          .replace(/or/gi, '|')
-          .replace(/y\s*=\s*/g, '')
-          .replace(/k\(x\)\s*=\s*/g, '')
-          .trim();
-        
-        const extractedSimplified = extracted
-          .replace(/y\s*=\s*/g, '')
-          .replace(/k\(x\)\s*=\s*/g, '')
-          .trim();
-        
-        if (correctSimplified.includes(extractedSimplified) || extractedSimplified.includes(correctSimplified)) {
+        if (correctAnswer && extracted.includes(correctAnswer.replace(/y\s*=\s*/g, '').trim())) {
           return res.json({ reply: 'CORRECT: Yes! You got it!' });
         } else {
           return res.json({
             reply: `INCORRECT: You wrote "${extractedText}" but it's "${correctAnswer}"
-WHY: Look at the graph — the answer is on the y-axis.
-FIX: Check the sign. Try again!`
+WHY: Check the sign on the y-axis.
+FIX: Look at the graph again. Try again!`
           });
         }
       }
