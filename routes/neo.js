@@ -8,7 +8,7 @@ const openai = new OpenAI({
   baseURL: 'https://api.deepseek.com/v1',
 });
 
-// ElevenLabs Configuration - Jessica is BACK
+// ElevenLabs Configuration - Jessica
 const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY || 'sk_ba09732f52a6b3b2c4287daeb995841cf36e4180b8c06f2a';
 const ELEVENLABS_VOICE_ID = process.env.ELEVENLABS_VOICE_ID || 'cgSgspJ2msm6clMCkdW9'; // Jessica
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
@@ -21,7 +21,7 @@ const performanceDescriptions = {
 };
 
 // ==========================================
-// ASK NEO (Text) - 7th Grade Teaching Style
+// ASK NEO (Text) - Short Teaching Style
 // ==========================================
 router.post('/ask', async (req, res) => {
   const { message, subject, roomId, userId, systemPrompt, context } = req.body;
@@ -72,40 +72,15 @@ router.post('/ask', async (req, res) => {
 
     const finalSystemPrompt = systemPrompt || `You are Neo, the AI tutor inside SmartClass — a South African edtech platform.
 
-YOU ARE TEACHING STUDENTS WHO GET 12/100 IN MATHS. They are NOT dumb — they just never had someone explain it simply enough.
+TEACHING RULES:
+1. MAX 3 SENTENCES per explanation
+2. MAX 2-3 STEPS
+3. Get to the point IMMEDIATELY
+4. One short analogy MAX ("like stairs", "like a smile")
+5. Be warm but BRIEF
+6. End with "Try again!"
 
-━━━━━━━━━━━━━━━━━━━━━━━
-TEACHING RULES (Follow STRICTLY)
-━━━━━━━━━━━━━━━━━━━━━━━
-
-1. EXPLAIN LIKE THEY'RE IN 7TH GRADE
-   - Use the SIMPLEST words possible
-   - Use everyday analogies (cookies, stairs, temperature, money, soccer)
-   - One idea per sentence
-   - Short sentences
-
-2. BREAK EVERYTHING INTO TINY NUMBERED STEPS
-   - Step 1, Step 2, Step 3...
-   - Never skip steps
-   - Assume they know NOTHING
-
-3. BE WARM AND ENCOURAGING
-   - Celebrate small wins
-   - Never judge
-   - "You've got this!" energy
-
-4. SOUTH AFRICAN CONTEXT
-   - Use rands, local examples
-   - CAPS awareness
-
-5. NEVER just give the answer
-   - Guide them to discover it
-   - Ask "What do YOU think?"
-
-6. Keep it SHORT — 4-5 sentences max per step
-7. Sound human, warm, genuinely invested
-
-End with an encouraging check-in question.`;
+Sound human, warm, and genuinely invested.`;
 
     const messages = [
       { role: 'system', content: finalSystemPrompt },
@@ -122,7 +97,7 @@ End with an encouraging check-in question.`;
       model: 'deepseek-chat',
       messages: messages,
       temperature: 0.7,
-      max_tokens: 800,
+      max_tokens: 200,
     });
 
     const neoReply = completion.choices[0].message.content;
@@ -172,8 +147,8 @@ router.post('/speak', async (req, res) => {
     }
 
     let cleanText = text.replace(/[^a-zA-Z0-9\s.,!?()=+\-']/g, '');
-    if (cleanText.length > 500) {
-      cleanText = cleanText.substring(0, 500);
+    if (cleanText.length > 300) {
+      cleanText = cleanText.substring(0, 300);
     }
 
     if (!cleanText.trim()) {
@@ -230,7 +205,7 @@ router.post('/speak', async (req, res) => {
 });
 
 // ==========================================
-// NEO VISION — OpenAI reads, DeepSeek teaches (7th Grade Style)
+// NEO VISION — OpenAI reads, DeepSeek teaches SHORT
 // ==========================================
 router.post('/vision', async (req, res) => {
   try {
@@ -281,7 +256,7 @@ router.post('/vision', async (req, res) => {
               }
             ],
             temperature: 0,
-            max_tokens: 100,
+            max_tokens: 50,
           }),
         });
 
@@ -327,7 +302,7 @@ router.post('/vision', async (req, res) => {
               }
             ],
             temperature: 0,
-            max_tokens: 100,
+            max_tokens: 50,
           }),
         });
 
@@ -348,8 +323,8 @@ router.post('/vision', async (req, res) => {
 
     console.log('Extracted answer:', extractedText);
 
-    // Step 4: DeepSeek teaches like a 7th grader
-    console.log('Step 4: DeepSeek teaching (7th grade style)...');
+    // Step 4: DeepSeek teaches SHORT
+    console.log('Step 4: DeepSeek teaching (short style)...');
     
     try {
       const deepseekResponse = await fetch('https://api.deepseek.com/v1/chat/completions', {
@@ -363,33 +338,34 @@ router.post('/vision', async (req, res) => {
           messages: [
             {
               role: 'system',
-              content: `You are Neo, a warm and patient mathematics tutor for South African students who get 12/100 in maths. They are NOT dumb — they just never had someone explain it simply.
+              content: `You are Neo, a maths tutor for South African students with SHORT ATTENTION SPANS who get 12/100.
 
-EXPLAIN LIKE YOU'RE TALKING TO A 7TH GRADER:
-- Use the SIMPLEST words possible
-- Use everyday analogies (cookies, stairs, temperature, money, soccer)
-- One idea per sentence
-- Break everything into TINY numbered steps (Step 1, Step 2, Step 3...)
-- NEVER assume they know anything
-- Be encouraging: "You've got this!"
+TEACHING RULES:
+1. MAX 3 SENTENCES per explanation
+2. MAX 2-3 STEPS
+3. Get to the point IMMEDIATELY
+4. One short analogy MAX ("like stairs", "like a smile")
+5. Be warm but BRIEF
+6. End with "Try again!"
 
 RESPOND IN THIS FORMAT:
 
 If CORRECT:
-"CORRECT: [warm, brief praise]"
+"CORRECT: [3 words max, like 'Yes! You got it!']"
 
 If WRONG:
-"INCORRECT: [what they wrote vs correct answer in simple words]
-MISTAKE: [explain the mistake in ONE simple sentence]
-TEACHING: [explain the solution like talking to a 7th grader. Use analogies. Number each step. Be encouraging.]"`
+"INCORRECT: [what they wrote vs correct]
+WHY: [ONE sentence]
+FIX: [ONE sentence how to fix it]
+AGAIN: [encouragement to try again]"`
             },
             {
               role: 'user',
-              content: `${message}\n\nSTUDENT'S EXTRACTED ANSWER: ${extractedText}\n\nCompare this to the memorandum and explain like you're teaching a 7th grader who gets 12/100 in maths. Use analogies and tiny steps.`
+              content: `${message}\n\nSTUDENT'S EXTRACTED ANSWER: ${extractedText}\n\nCompare and respond SHORT. Max 3 sentences.`
             }
           ],
           temperature: 0.7,
-          max_tokens: 800,
+          max_tokens: 150,
         }),
       });
 
@@ -416,12 +392,12 @@ TEACHING: [explain the solution like talking to a 7th grader. Use analogies. Num
           .trim();
         
         if (correctSimplified.includes(extractedSimplified) || extractedSimplified.includes(correctSimplified)) {
-          return res.json({ reply: 'CORRECT: Well done! You got it right!' });
+          return res.json({ reply: 'CORRECT: Yes! You got it!' });
         } else {
           return res.json({
-            reply: `INCORRECT: You wrote "${extractedText}" but the correct answer is "${correctAnswer}"
-MISTAKE: Your answer doesn't match what we need
-TEACHING: Step 1: Look at the graph. Step 2: Find where the dotted line sits on the y-axis. Step 3: That number is your answer. You've got this!`
+            reply: `INCORRECT: You wrote "${extractedText}" but it's "${correctAnswer}"
+WHY: Look at the graph — the answer is on the y-axis.
+FIX: Check the sign. Try again!`
           });
         }
       }
