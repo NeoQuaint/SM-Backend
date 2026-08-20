@@ -21,7 +21,7 @@ const performanceDescriptions = {
 };
 
 // ==========================================
-// ASK NEO (Text) - Short with Analogies
+// ASK NEO (Text) - Short with Formulas
 // ==========================================
 router.post('/ask', async (req, res) => {
   const { message, subject, roomId, userId, systemPrompt, context } = req.body;
@@ -49,25 +49,32 @@ router.post('/ask', async (req, res) => {
     const grade = user?.grade || '10';
     const level = user?.education_level || 'highschool';
     const userSubjects = user?.subjects || [];
-    const performance = user?.performance || {};
     const currentSubject = subject || userSubjects[0] || 'general';
 
     const finalSystemPrompt = systemPrompt || `You are Neo, the AI tutor inside SmartClass — a South African edtech platform.
 
 TEACHING RULES:
-1. MAX 3 SENTENCES per explanation
-2. MAX 2-3 STEPS
-3. Use analogies with PEOPLE, CARS, HILLS, BALLS, STAIRS, MONEY
-4. Explain formulas in plain language
+1. MAX 3 SENTENCES total
+2. Use analogies: CARS, HILLS, BALLS, STAIRS, MONEY, FRIENDS
+3. ALWAYS show the formula in plain text format
+4. Substitute ACTUAL numbers into the formula
 5. Be warm but BRIEF
 6. End with "Try again!"
 
-FORMULA ANALOGIES:
-- Gradient: "How steep the hill is. Two friends on a hill — top friend minus bottom friend."
-- Asymptote: "A car driving toward a wall that it never hits."
-- Turning point: "Throw a ball up. The highest point before it falls."
-- X-intercept: "Where the graph crosses the road (x-axis)."
-- Y-intercept: "Where the graph starts on the y-axis."`;
+FORMULA FORMATS TO USE:
+- Gradient: m = (y2 - y1)/(x2 - x1)
+- Y-intercept: Put x = 0
+- X-intercept: Put y = 0
+- Asymptote: y = [number]
+- Turning point: x = -b/(2a)
+
+ALWAYS write the formula with ACTUAL NUMBERS substituted.
+
+Example gradient teaching:
+"Gradient formula: m = (y2 - y1)/(x2 - x1)
+Your points: A(0; -3) and B(2; 0)
+m = (0 - (-3))/(2 - 0) = 3/2 = 1.5
+Think: the hill goes up 3 for every 2 steps. Try again!"`;
 
     const messages = [
       { role: 'system', content: finalSystemPrompt },
@@ -79,7 +86,7 @@ FORMULA ANALOGIES:
       model: 'deepseek-chat',
       messages: messages,
       temperature: 0.7,
-      max_tokens: 150,
+      max_tokens: 200,
     });
 
     const neoReply = completion.choices[0].message.content;
@@ -132,11 +139,11 @@ router.post('/speak', async (req, res) => {
         },
         body: JSON.stringify({
           text: cleanText,
-          model_id: 'eleven_turbo_v2_5', // Turbo = cheaper
+          model_id: 'eleven_turbo_v2_5',
           voice_settings: {
             stability: 0.4,
             similarity_boost: 0.8,
-            style: 0.3, // Lower style = cheaper
+            style: 0.3,
             use_speaker_boost: true,
           },
         }),
@@ -183,7 +190,7 @@ router.post('/vision', async (req, res) => {
 
     let extractedText = '';
 
-    // Step 1: OpenAI reads handwriting (cheap - max 30 tokens)
+    // Step 1: OpenAI reads handwriting
     if (OPENAI_API_KEY) {
       try {
         console.log('Step 1: OpenAI reading handwriting...');
@@ -232,7 +239,7 @@ router.post('/vision', async (req, res) => {
       }
     }
 
-    // Step 2: DeepSeek Vision fallback (free)
+    // Step 2: DeepSeek Vision fallback
     if (!extractedText || extractedText === 'UNCLEAR' || extractedText.includes('UNCLEAR')) {
       try {
         console.log('Step 2: DeepSeek Vision fallback...');
@@ -283,7 +290,7 @@ router.post('/vision', async (req, res) => {
 
     console.log('Extracted answer:', extractedText);
 
-    // Step 4: DeepSeek teaches SHORT with analogies
+    // Step 4: DeepSeek teaches SHORT with formulas
     try {
       const deepseekResponse = await fetch('https://api.deepseek.com/v1/chat/completions', {
         method: 'POST',
@@ -296,21 +303,28 @@ router.post('/vision', async (req, res) => {
           messages: [
             {
               role: 'system',
-              content: `You are Neo, a maths tutor for South African students with SHORT ATTENTION SPANS who get 12/100.
+              content: `You are Neo, a maths tutor for South African students with SHORT ATTENTION SPANS.
 
 TEACHING RULES:
 1. MAX 3 SENTENCES total
 2. Use analogies: CARS, HILLS, BALLS, STAIRS, MONEY, FRIENDS
-3. Explain formulas in plain language
-4. Be warm but BRIEF
-5. End with "Try again!"
+3. ALWAYS show the formula in plain text format
+4. Substitute ACTUAL numbers into the formula
+5. Be warm but BRIEF
+6. End with "Try again!"
 
-FORMULA ANALOGIES:
-- Gradient: "How steep the hill is. Top friend minus bottom friend."
-- Asymptote: "A car driving toward a wall it never hits."
-- Turning point: "Throw a ball up. Highest point before it falls."
-- X-intercept: "Where the graph crosses the road."
-- Y-intercept: "Where the graph starts on the y-axis."
+FORMULA FORMATS TO USE:
+- Gradient: m = (y2 - y1)/(x2 - x1)
+- Y-intercept: Put x = 0
+- X-intercept: Put y = 0
+- Asymptote: y = [number]
+- Turning point: x = -b/(2a)
+
+Example gradient teaching:
+"Gradient formula: m = (y2 - y1)/(x2 - x1)
+Your points: A(0; -3) and B(2; 0)
+m = (0 - (-3))/(2 - 0) = 3/2 = 1.5
+Think: the hill goes up 3 for every 2 steps. Try again!"
 
 RESPOND IN THIS FORMAT:
 
@@ -319,17 +333,17 @@ If CORRECT:
 
 If WRONG:
 "INCORRECT: [what they wrote vs correct]
-WHY: [ONE sentence with analogy]
-FIX: [ONE sentence]
+WHY: [ONE sentence with formula]
+FIX: [ONE sentence with formula and numbers]
 AGAIN: [Try again!]"`
             },
             {
               role: 'user',
-              content: `${message}\n\nSTUDENT'S EXTRACTED ANSWER: ${extractedText}\n\nRespond SHORT. Max 3 sentences. Use analogies.`
+              content: `${message}\n\nSTUDENT'S EXTRACTED ANSWER: ${extractedText}\n\nRespond SHORT. Show formulas with actual numbers. Max 3 sentences.`
             }
           ],
           temperature: 0.7,
-          max_tokens: 120,
+          max_tokens: 200,
         }),
       });
 
@@ -338,7 +352,6 @@ AGAIN: [Try again!]"`
       console.log('DeepSeek final reply:', finalReply);
 
       if (!finalReply || !finalReply.trim()) {
-        // Basic fallback
         const extracted = extractedText.toLowerCase().trim();
         const correctAnswerMatch = message.match(/Correct answer: ([^\n]+)/);
         const correctAnswer = correctAnswerMatch ? correctAnswerMatch[1].toLowerCase().trim() : '';
