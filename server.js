@@ -13,6 +13,7 @@ const messagesRoutes = require('./routes/messages');
 const reviewsRoutes = require('./routes/reviews');
 const analyticsRoutes = require('./routes/analytics');
 const neoRoutes = require('./routes/neo');
+const yocoRoutes = require('./routes/yoco');
 
 const app = express();
 const PORT = process.env.PORT || 5001;
@@ -50,6 +51,7 @@ app.use('/api/messages', messagesRoutes);
 app.use('/api/reviews', reviewsRoutes);
 app.use('/api/track-event', analyticsRoutes);
 app.use('/api/neo', neoRoutes);
+app.use('/api/yoco', yocoRoutes);
 
 app.listen(PORT, () => {
   console.log(`🚀 SmartClass API running on port ${PORT}`);
