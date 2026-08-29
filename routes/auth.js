@@ -123,6 +123,9 @@ router.post('/google', async (req, res) => {
   }
 
   try {
+    console.log('🔐 Verifying Google credential...');
+    console.log('GOOGLE_CLIENT_ID:', GOOGLE_CLIENT_ID ? 'Set ✓' : 'NOT SET ❌');
+    
     // Verify Google token
     const ticket = await googleClient.verifyIdToken({
       idToken: credential,
@@ -133,6 +136,8 @@ router.post('/google', async (req, res) => {
     const googleId = payload.sub;
     const email = payload.email;
     const fullName = payload.name;
+
+    console.log('✅ Google verified:', email);
 
     if (!email) {
       return res.status(400).json({ status: 'error', error: 'No email from Google.' });
@@ -183,8 +188,9 @@ router.post('/google', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Google auth error:', error);
-    res.status(500).json({ status: 'error', error: 'Google authentication failed.' });
+    console.error('❌ Google auth error:', error.message);
+    console.error('Full error:', error);
+    res.status(500).json({ status: 'error', error: 'Google authentication failed: ' + error.message });
   }
 });
 
