@@ -1,17 +1,14 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
-const authMiddleware = require('../middleware/auth');
 
 const YOCO_API = 'https://payments.yoco.com/api/checkouts';
 const YOCO_SECRET_KEY = process.env.YOCO_SECRET_KEY_SMARTCLASS;
-const FRONTEND_URL = process.env.FRONTEND_URL || 'https://sm-simple.vercel.app';
+const FRONTEND_URL = process.env.FRONTEND_URL || 'https://www.smartclasss.com';
 const YOCO_TIMEOUT = 15000;
 const MAX_RETRIES = 3;
 
-// ====================
 // YOCO API HELPER
-// ====================
 const yocoFetch = async (url, options, retries = MAX_RETRIES) => {
   for (let attempt = 1; attempt <= retries; attempt++) {
     const controller = new AbortController();
@@ -29,7 +26,6 @@ const yocoFetch = async (url, options, retries = MAX_RETRIES) => {
     try {
       const response = await fetch(url, requestOptions);
       clearTimeout(timeoutId);
-      
       const data = await response.json();
       
       if (!response.ok && response.status >= 500 && attempt < retries) {
@@ -40,22 +36,17 @@ const yocoFetch = async (url, options, retries = MAX_RETRIES) => {
       return { response, data };
     } catch (error) {
       clearTimeout(timeoutId);
-      
       if (attempt < retries && (error.name === 'AbortError' || error.name === 'TypeError' || error.code === 'ECONNRESET')) {
         await new Promise(r => setTimeout(r, 1000 * attempt));
         continue;
       }
-      
       throw error;
     }
   }
 };
 
-// ====================
 // WEBHOOK DUPLICATE PREVENTION
-// ====================
 const processedWebhooks = new Map();
-
 setInterval(() => {
   const now = Date.now();
   for (const [key, timestamp] of processedWebhooks) {
@@ -65,28 +56,17 @@ setInterval(() => {
   }
 }, 5 * 60 * 1000);
 
-// ====================
-// CREATE SUBSCRIPTION CHECKOUT
-// ====================
-router.post('/create-subscription-checkout', authMiddleware, async (req, res) => {
+// CREATE SUBSCRIPTION CHECKOUT - NO AUTH
+router.post('/create-subscription-checkout', async (req, res) => {
   try {
-    const userId = req.user.userId || req.user.id;
-    const { amount, package: pkg, email } = req.body;
+    const { amount, package: pkg, email, userId } = req.body;
     
     if (!amount || amount <= 0) {
       return res.status(400).json({ success: false, error: 'Invalid amount' });
     }
     
-    let customerEmail = email;
-    let customerName = 'SmartClass Student';
-    
-    if (!customerEmail) {
-      const userResult = await pool.query('SELECT email FROM users WHERE id = $1', [userId]);
-      if (userResult.rows.length > 0) {
-        customerEmail = userResult.rows[0].email;
-      }
-    }
-    
+    const userIdentifier = userId || email || 'guest';
+    const customerEmail = email || 'student@smartclass.co.za';
     const amountInCents = Math.round(amount * 100);
     
     const requestBody = {
@@ -97,10 +77,10 @@ router.post('/create-subscription-checkout', authMiddleware, async (req, res) =>
       failureUrl: `${FRONTEND_URL}/payment/cancel`,
       customer: {
         email: customerEmail,
-        name: customerName
+        name: 'SmartClass Student'
       },
       metadata: {
-        userId: userId.toString(),
+        userId: String(userIdentifier),
         type: 'subscription',
         package: pkg
       }
@@ -118,8 +98,7 @@ router.post('/create-subscription-checkout', authMiddleware, async (req, res) =>
     if (!response.ok) {
       return res.status(response.status).json({ 
         success: false, 
-        error: data.message || 'Failed to create checkout',
-        details: data
+        error: data.message || 'Failed to create checkout'
       });
     }
     
@@ -127,7 +106,7 @@ router.post('/create-subscription-checkout', authMiddleware, async (req, res) =>
       await pool.query(`
         CREATE TABLE IF NOT EXISTS smartclass_subscription_payments (
           id SERIAL PRIMARY KEY,
-          user_id INTEGER NOT NULL,
+          user_id VARCHAR(255) NOT NULL,
           checkout_id VARCHAR(255) NOT NULL,
           package VARCHAR(50),
           amount DECIMAL(10,2),
@@ -141,16 +120,12 @@ router.post('/create-subscription-checkout', authMiddleware, async (req, res) =>
       await pool.query(
         `INSERT INTO smartclass_subscription_payments (user_id, checkout_id, package, amount, status, created_at)
          VALUES ($1, $2, $3, $4, 'pending', NOW())`,
-        [userId, data.id, pkg, amount]
+        [String(userIdentifier), data.id, pkg, amount]
       );
       
-      res.json({
-        success: true,
-        checkoutId: data.id,
-        redirectUrl: data.redirectUrl
-      });
+      res.json({ success: true, checkoutId: data.id, redirectUrl: data.redirectUrl });
     } else {
-      res.status(500).json({ success: false, error: 'No checkout created', details: data });
+      res.status(500).json({ success: false, error: 'No checkout created' });
     }
     
   } catch (error) {
@@ -159,28 +134,17 @@ router.post('/create-subscription-checkout', authMiddleware, async (req, res) =>
   }
 });
 
-// ====================
-// CREATE SWAP FEE CHECKOUT (R19)
-// ====================
-router.post('/create-swap-checkout', authMiddleware, async (req, res) => {
+// CREATE SWAP FEE CHECKOUT - NO AUTH
+router.post('/create-swap-checkout', async (req, res) => {
   try {
-    const userId = req.user.userId || req.user.id;
-    const { amount, oldSubject, newSubject, email } = req.body;
+    const { amount, oldSubject, newSubject, email, userId } = req.body;
     
     if (!amount || amount <= 0) {
       return res.status(400).json({ success: false, error: 'Invalid amount' });
     }
     
-    let customerEmail = email;
-    let customerName = 'SmartClass Student';
-    
-    if (!customerEmail) {
-      const userResult = await pool.query('SELECT email FROM users WHERE id = $1', [userId]);
-      if (userResult.rows.length > 0) {
-        customerEmail = userResult.rows[0].email;
-      }
-    }
-    
+    const userIdentifier = userId || email || 'guest';
+    const customerEmail = email || 'student@smartclass.co.za';
     const amountInCents = Math.round(amount * 100);
     
     const requestBody = {
@@ -191,10 +155,10 @@ router.post('/create-swap-checkout', authMiddleware, async (req, res) => {
       failureUrl: `${FRONTEND_URL}/profile?swap=cancelled`,
       customer: {
         email: customerEmail,
-        name: customerName
+        name: 'SmartClass Student'
       },
       metadata: {
-        userId: userId.toString(),
+        userId: String(userIdentifier),
         type: 'swap_fee',
         oldSubject,
         newSubject
@@ -213,8 +177,7 @@ router.post('/create-swap-checkout', authMiddleware, async (req, res) => {
     if (!response.ok) {
       return res.status(response.status).json({ 
         success: false, 
-        error: data.message || 'Failed to create checkout',
-        details: data
+        error: data.message || 'Failed to create checkout'
       });
     }
     
@@ -222,16 +185,12 @@ router.post('/create-swap-checkout', authMiddleware, async (req, res) => {
       await pool.query(
         `INSERT INTO smartclass_subscription_payments (user_id, checkout_id, package, amount, status, created_at)
          VALUES ($1, $2, 'swap_fee', $3, 'pending', NOW())`,
-        [userId, data.id, amount]
+        [String(userIdentifier), data.id, amount]
       );
       
-      res.json({
-        success: true,
-        checkoutId: data.id,
-        redirectUrl: data.redirectUrl
-      });
+      res.json({ success: true, checkoutId: data.id, redirectUrl: data.redirectUrl });
     } else {
-      res.status(500).json({ success: false, error: 'No checkout created', details: data });
+      res.status(500).json({ success: false, error: 'No checkout created' });
     }
     
   } catch (error) {
@@ -240,9 +199,7 @@ router.post('/create-swap-checkout', authMiddleware, async (req, res) => {
   }
 });
 
-// ====================
 // YOCO WEBHOOK
-// ====================
 router.post('/webhook', async (req, res) => {
   try {
     const event = req.body;
@@ -258,7 +215,6 @@ router.post('/webhook', async (req, res) => {
     console.log('📩 Yoco webhook received:', { checkoutId, amount, userId, paymentType, pkg });
     
     if (processedWebhooks.has(checkoutId)) {
-      console.log(`⏭️ Skipping duplicate webhook: ${checkoutId}`);
       return res.status(200).json({ received: true, duplicate: true });
     }
     processedWebhooks.set(checkoutId, Date.now());
@@ -269,34 +225,11 @@ router.post('/webhook', async (req, res) => {
         [checkoutId]
       );
       
-      if (paymentType === 'swap_fee') {
-        const oldSubject = metadata.oldSubject;
-        const newSubject = metadata.newSubject;
-        
-        const userResult = await pool.query(
-          'SELECT subjects FROM users WHERE id = $1',
-          [userId]
-        );
-        
-        if (userResult.rows.length > 0) {
-          let subjects = userResult.rows[0].subjects;
-          if (typeof subjects === 'string') {
-            try { subjects = JSON.parse(subjects); } catch(e) { subjects = []; }
-          }
-          const updatedSubjects = subjects.map(s => s === oldSubject ? newSubject : s);
-          
-          await pool.query(
-            'UPDATE users SET subjects = $1 WHERE id = $2',
-            [JSON.stringify(updatedSubjects), userId]
-          );
-          
-          console.log(`✅ Subject swap completed: ${oldSubject} -> ${newSubject}`);
-        }
-      } else if (paymentType === 'subscription') {
+      if (paymentType === 'subscription') {
         await pool.query(`
           CREATE TABLE IF NOT EXISTS smartclass_subscriptions (
             id SERIAL PRIMARY KEY,
-            user_id INTEGER NOT NULL,
+            user_id VARCHAR(255) NOT NULL,
             package VARCHAR(50),
             amount DECIMAL(10,2),
             status VARCHAR(20) DEFAULT 'active',
@@ -317,9 +250,9 @@ router.post('/webhook', async (req, res) => {
             status = 'active',
             payment_reference = EXCLUDED.payment_reference,
             updated_at = NOW()
-        `, [userId, pkg, amount, checkoutId]);
+        `, [String(userId), pkg, amount, checkoutId]);
         
-        console.log(`✅ Subscription activated: User ${userId} - ${pkg} at R${amount}/month`);
+        console.log(`✅ Subscription activated: ${userId} - ${pkg} at R${amount}/month`);
       }
     }
     
@@ -331,17 +264,15 @@ router.post('/webhook', async (req, res) => {
   }
 });
 
-// ====================
-// CHECK SUBSCRIPTION STATUS
-// ====================
-router.get('/check-subscription', authMiddleware, async (req, res) => {
+// CHECK SUBSCRIPTION STATUS - NO AUTH
+router.get('/check-subscription', async (req, res) => {
   try {
-    const userId = req.user.userId || req.user.id;
+    const userId = req.query.userId || req.query.email || 'guest';
     
     await pool.query(`
       CREATE TABLE IF NOT EXISTS smartclass_subscriptions (
         id SERIAL PRIMARY KEY,
-        user_id INTEGER NOT NULL,
+        user_id VARCHAR(255) NOT NULL,
         package VARCHAR(50),
         amount DECIMAL(10,2),
         status VARCHAR(20) DEFAULT 'active',
@@ -354,7 +285,7 @@ router.get('/check-subscription', authMiddleware, async (req, res) => {
     
     const result = await pool.query(
       `SELECT * FROM smartclass_subscriptions WHERE user_id = $1 AND status = 'active'`,
-      [userId]
+      [String(userId)]
     );
     
     if (result.rows.length > 0) {
@@ -369,26 +300,6 @@ router.get('/check-subscription', authMiddleware, async (req, res) => {
     
   } catch (error) {
     console.error('❌ Check subscription error:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// ====================
-// CANCEL SUBSCRIPTION
-// ====================
-router.post('/cancel-subscription', authMiddleware, async (req, res) => {
-  try {
-    const userId = req.user.userId || req.user.id;
-    
-    await pool.query(
-      `UPDATE smartclass_subscriptions SET status = 'cancelled', updated_at = NOW() WHERE user_id = $1 AND status = 'active'`,
-      [userId]
-    );
-    
-    res.json({ success: true, message: 'Subscription cancelled' });
-    
-  } catch (error) {
-    console.error('❌ Cancel subscription error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
