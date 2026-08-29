@@ -333,3 +333,4 @@ router.get('/check-subscription', async (req, res) => {
 });
 
 module.exports = router;
+// Force redeploy 08/30/2026 00:50:25
