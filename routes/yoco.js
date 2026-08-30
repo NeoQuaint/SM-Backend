@@ -258,4 +258,47 @@ router.get('/check-subscription', async (req, res) => {
   }
 });
 
+// CHECK LATEST PAYMENT (fallback when no checkout ID in URL)
+router.get('/check-latest-payment', async (req, res) => {
+  try {
+    const userId = req.query.userId || req.query.email || 'guest';
+    
+    const result = await pool.query(
+      `SELECT checkout_id FROM smartclass_subscription_payments 
+       WHERE user_id = $1 
+       ORDER BY created_at DESC 
+       LIMIT 1`,
+      [String(userId)]
+    );
+    
+    if (result.rows.length > 0) {
+      res.json({ checkoutId: result.rows[0].checkout_id });
+    } else {
+      res.json({ checkoutId: null });
+    }
+    
+  } catch (error) {
+    console.error('❌ Check latest payment error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// CANCEL SUBSCRIPTION
+router.post('/cancel-subscription', async (req, res) => {
+  try {
+    const { userId } = req.body;
+    
+    await pool.query(
+      `UPDATE smartclass_subscriptions SET status = 'cancelled', updated_at = NOW() WHERE user_id = $1 AND status = 'active'`,
+      [String(userId)]
+    );
+    
+    res.json({ success: true, message: 'Subscription cancelled' });
+    
+  } catch (error) {
+    console.error('❌ Cancel subscription error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 module.exports = router;
