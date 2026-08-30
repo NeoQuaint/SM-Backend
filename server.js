@@ -1,6 +1,3 @@
-// ====================
-// 1. ENVIRONMENT & ESSENTIAL IMPORTS
-// ====================
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -16,12 +13,12 @@ console.log('✅ Environment variables loaded');
 console.log('🚀 SMARTCLASS SERVER STARTING');
 
 // ====================
-// 2. DATABASE
+// DATABASE
 // ====================
 const pool = require('./db');
 
 // ====================
-// 3. SECURITY MIDDLEWARE
+// SECURITY MIDDLEWARE
 // ====================
 app.set('trust proxy', 1);
 
@@ -70,27 +67,26 @@ app.use((req, res, next) => {
 });
 
 // ====================
-// 4. CORS
+// CORS
 // ====================
 app.use(cors());
-app.options('*', cors());
 
 // ====================
-// 5. COMPRESSION & BODY PARSING
+// COMPRESSION & BODY PARSING
 // ====================
 app.use(compression());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // ====================
-// 6. RATE LIMITING
+// RATE LIMITING
 // ====================
 app.use('/api/', apiLimiter);
 app.use('/api/auth/', authLimiter);
 app.use('/api/yoco/', paymentLimiter);
 
 // ====================
-// 7. ROUTES
+// ROUTES
 // ====================
 const authRoutes = require('./routes/auth');
 const subjectsRoutes = require('./routes/subjects');
@@ -127,7 +123,7 @@ app.use('/api/neo', neoRoutes);
 app.use('/api/yoco', yocoRoutes);
 
 // ====================
-// 8. ERROR HANDLERS
+// ERROR HANDLERS
 // ====================
 app.use((err, req, res, next) => {
   console.error('❌ Unhandled Error:', err.stack);
@@ -135,12 +131,13 @@ app.use((err, req, res, next) => {
   res.status(status).json({ error: 'Internal server error' });
 });
 
-app.use('*', (req, res) => {
+// 404 handler (Express 5 safe - no wildcard)
+app.use((req, res) => {
   res.status(404).json({ error: 'Route not found', path: req.originalUrl });
 });
 
 // ====================
-// 9. DATABASE INITIALIZATION
+// DATABASE INITIALIZATION
 // ====================
 async function initializeDatabase() {
   const client = await pool.connect();
@@ -184,7 +181,7 @@ async function initializeDatabase() {
 }
 
 // ====================
-// 10. START SERVER
+// START SERVER
 // ====================
 (async () => {
   try {
