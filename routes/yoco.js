@@ -45,18 +45,7 @@ const yocoFetch = async (url, options, retries = MAX_RETRIES) => {
   }
 };
 
-// WEBHOOK DUPLICATE PREVENTION
-const processedWebhooks = new Map();
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, timestamp] of processedWebhooks) {
-    if (now - timestamp > 30 * 60 * 1000) {
-      processedWebhooks.delete(key);
-    }
-  }
-}, 5 * 60 * 1000);
-
-// CREATE SUBSCRIPTION CHECKOUT - NO AUTH
+// CREATE SUBSCRIPTION CHECKOUT
 router.post('/create-subscription-checkout', async (req, res) => {
   try {
     const { amount, package: pkg, email, userId } = req.body;
@@ -75,15 +64,8 @@ router.post('/create-subscription-checkout', async (req, res) => {
       successUrl: `${FRONTEND_URL}/payment/success`,
       cancelUrl: `${FRONTEND_URL}/payment/cancel`,
       failureUrl: `${FRONTEND_URL}/payment/cancel`,
-      customer: {
-        email: customerEmail,
-        name: 'SmartClass Student'
-      },
-      metadata: {
-        userId: String(userIdentifier),
-        type: 'subscription',
-        package: pkg
-      }
+      customer: { email: customerEmail, name: 'SmartClass Student' },
+      metadata: { userId: String(userIdentifier), type: 'subscription', package: pkg }
     };
     
     const { response, data } = await yocoFetch(YOCO_API, {
@@ -96,10 +78,7 @@ router.post('/create-subscription-checkout', async (req, res) => {
     });
     
     if (!response.ok) {
-      return res.status(response.status).json({ 
-        success: false, 
-        error: data.message || 'Failed to create checkout'
-      });
+      return res.status(response.status).json({ success: false, error: data.message || 'Failed to create checkout' });
     }
     
     if (data.id && data.redirectUrl) {
@@ -134,7 +113,7 @@ router.post('/create-subscription-checkout', async (req, res) => {
   }
 });
 
-// CREATE SWAP FEE CHECKOUT - NO AUTH
+// CREATE SWAP FEE CHECKOUT (R19)
 router.post('/create-swap-checkout', async (req, res) => {
   try {
     const { amount, oldSubject, newSubject, email, userId } = req.body;
@@ -153,16 +132,8 @@ router.post('/create-swap-checkout', async (req, res) => {
       successUrl: `${FRONTEND_URL}/profile?swap=success`,
       cancelUrl: `${FRONTEND_URL}/profile?swap=cancelled`,
       failureUrl: `${FRONTEND_URL}/profile?swap=cancelled`,
-      customer: {
-        email: customerEmail,
-        name: 'SmartClass Student'
-      },
-      metadata: {
-        userId: String(userIdentifier),
-        type: 'swap_fee',
-        oldSubject,
-        newSubject
-      }
+      customer: { email: customerEmail, name: 'SmartClass Student' },
+      metadata: { userId: String(userIdentifier), type: 'swap_fee', oldSubject, newSubject }
     };
     
     const { response, data } = await yocoFetch(YOCO_API, {
@@ -175,10 +146,7 @@ router.post('/create-swap-checkout', async (req, res) => {
     });
     
     if (!response.ok) {
-      return res.status(response.status).json({ 
-        success: false, 
-        error: data.message || 'Failed to create checkout'
-      });
+      return res.status(response.status).json({ success: false, error: data.message || 'Failed to create checkout' });
     }
     
     if (data.id && data.redirectUrl) {
@@ -199,72 +167,62 @@ router.post('/create-swap-checkout', async (req, res) => {
   }
 });
 
-// YOCO WEBHOOK
-router.post('/webhook', async (req, res) => {
+// VERIFY PAYMENT VIA API (works without webhooks)
+router.post('/verify-payment', async (req, res) => {
   try {
-    const event = req.body;
-    const payload = event.payload || event.data || {};
-    const metadata = payload.metadata || {};
+    const { checkoutId, email, userId } = req.body;
     
-    const checkoutId = metadata.checkoutId || payload.id || payload.checkoutId || event.id || 'unknown';
-    const amount = payload.amount ? (payload.amount / 100).toFixed(2) : '0.00';
-    const userId = metadata.userId;
-    const paymentType = metadata.type;
-    const pkg = metadata.package;
-    
-    console.log('📩 Yoco webhook received:', { checkoutId, amount, userId, paymentType, pkg });
-    
-    if (processedWebhooks.has(checkoutId)) {
-      return res.status(200).json({ received: true, duplicate: true });
+    if (!checkoutId) {
+      return res.status(400).json({ success: false, error: 'Checkout ID required' });
     }
-    processedWebhooks.set(checkoutId, Date.now());
     
-    if (event.type === 'checkout.completed' || event.type === 'payment.succeeded') {
+    const { response, data: checkout } = await yocoFetch(
+      `https://payments.yoco.com/api/checkouts/${checkoutId}`,
+      {
+        headers: { 'Authorization': `Bearer ${YOCO_SECRET_KEY}` }
+      }
+    );
+    
+    if (!response.ok) {
+      return res.status(500).json({ success: false, error: 'Failed to verify payment' });
+    }
+    
+    if (checkout.status === 'COMPLETED' || checkout.status === 'completed') {
+      const userIdentifier = userId || email || 'guest';
+      const amount = (checkout.amount / 100).toFixed(2);
+      const pkg = checkout.metadata?.package || 'Basic';
+      
       await pool.query(
         `UPDATE smartclass_subscription_payments SET status = 'completed', completed_at = NOW() WHERE checkout_id = $1`,
         [checkoutId]
       );
       
-      if (paymentType === 'subscription') {
-        await pool.query(`
-          CREATE TABLE IF NOT EXISTS smartclass_subscriptions (
-            id SERIAL PRIMARY KEY,
-            user_id VARCHAR(255) NOT NULL,
-            package VARCHAR(50),
-            amount DECIMAL(10,2),
-            status VARCHAR(20) DEFAULT 'active',
-            payment_reference VARCHAR(255),
-            created_at TIMESTAMP DEFAULT NOW(),
-            updated_at TIMESTAMP DEFAULT NOW(),
-            UNIQUE(user_id)
-          )
-        `);
-        
-        await pool.query(`
-          INSERT INTO smartclass_subscriptions (user_id, package, amount, status, payment_reference, created_at, updated_at)
-          VALUES ($1, $2, $3, 'active', $4, NOW(), NOW())
-          ON CONFLICT (user_id) 
-          DO UPDATE SET 
-            package = EXCLUDED.package,
-            amount = EXCLUDED.amount,
-            status = 'active',
-            payment_reference = EXCLUDED.payment_reference,
-            updated_at = NOW()
-        `, [String(userId), pkg, amount, checkoutId]);
-        
-        console.log(`✅ Subscription activated: ${userId} - ${pkg} at R${amount}/month`);
-      }
+      await pool.query(`
+        INSERT INTO smartclass_subscriptions (user_id, package, amount, status, payment_reference, created_at, updated_at)
+        VALUES ($1, $2, $3, 'active', $4, NOW(), NOW())
+        ON CONFLICT (user_id) 
+        DO UPDATE SET 
+          package = EXCLUDED.package,
+          amount = EXCLUDED.amount,
+          status = 'active',
+          payment_reference = EXCLUDED.payment_reference,
+          updated_at = NOW()
+      `, [String(userIdentifier), pkg, amount, checkoutId]);
+      
+      res.json({ success: true, hasSubscription: true, subscription: { package: pkg, amount: parseFloat(amount) } });
+    } else if (checkout.status === 'PENDING' || checkout.status === 'pending') {
+      res.json({ success: false, status: 'pending', message: 'Payment still processing' });
+    } else {
+      res.json({ success: false, status: checkout.status, message: 'Payment not completed' });
     }
     
-    res.status(200).json({ received: true });
-    
   } catch (error) {
-    console.error('❌ Yoco webhook error:', error);
-    res.status(200).json({ received: true });
+    console.error('❌ Verify payment error:', error);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// CHECK SUBSCRIPTION STATUS - NO AUTH
+// CHECK SUBSCRIPTION STATUS
 router.get('/check-subscription', async (req, res) => {
   try {
     const userId = req.query.userId || req.query.email || 'guest';
@@ -289,11 +247,7 @@ router.get('/check-subscription', async (req, res) => {
     );
     
     if (result.rows.length > 0) {
-      res.json({ 
-        success: true, 
-        hasSubscription: true, 
-        subscription: result.rows[0]
-      });
+      res.json({ success: true, hasSubscription: true, subscription: result.rows[0] });
     } else {
       res.json({ success: true, hasSubscription: false });
     }
