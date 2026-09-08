@@ -42,6 +42,12 @@ const paymentLimiter = rateLimit({
   message: { error: 'Too many payment attempts. Please wait a moment.' },
 });
 
+const supportLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { error: 'Too many support requests. Please try again later.' },
+});
+
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -69,7 +75,21 @@ app.use((req, res, next) => {
 // ====================
 // CORS
 // ====================
-app.use(cors());
+const corsOptions = {
+  origin: [
+    'http://localhost:3000',
+    'http://localhost:3001',
+    'http://localhost:5000',
+    'https://www.smartclasss.com',
+    'https://smartclasss.com',
+    'https://smartclass-wlgb.onrender.com'
+  ],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+};
+
+app.use(cors(corsOptions));
 
 // ====================
 // COMPRESSION & BODY PARSING
@@ -84,6 +104,7 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use('/api/', apiLimiter);
 app.use('/api/auth/', authLimiter);
 app.use('/api/yoco/', paymentLimiter);
+app.use('/api/support/', supportLimiter);
 
 // ====================
 // ROUTES
@@ -100,15 +121,26 @@ const reviewsRoutes = require('./routes/reviews');
 const analyticsRoutes = require('./routes/analytics');
 const neoRoutes = require('./routes/neo');
 const yocoRoutes = require('./routes/yoco');
+const supportRoutes = require('./routes/support'); // NEW - Support route
 
 app.get('/', (req, res) => {
-  res.json({ status: 'ok', service: 'SmartClass API', version: '1.0.0' });
+  res.json({ 
+    status: 'ok', 
+    service: 'SmartClass API', 
+    version: '1.0.0',
+    timestamp: new Date().toISOString()
+  });
 });
 
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'Neo is awake', database: 'connected', timestamp: new Date().toISOString() });
+  res.json({ 
+    status: 'Neo is awake', 
+    database: 'connected', 
+    timestamp: new Date().toISOString() 
+  });
 });
 
+// API Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/subjects', subjectsRoutes);
 app.use('/api/tutors', tutorsRoutes);
@@ -121,19 +153,28 @@ app.use('/api/reviews', reviewsRoutes);
 app.use('/api/track-event', analyticsRoutes);
 app.use('/api/neo', neoRoutes);
 app.use('/api/yoco', yocoRoutes);
+app.use('/api/support', supportRoutes); // NEW - Support route
 
 // ====================
 // ERROR HANDLERS
 // ====================
+// 404 handler
+app.use((req, res, next) => {
+  res.status(404).json({ 
+    error: 'Route not found', 
+    path: req.originalUrl,
+    method: req.method
+  });
+});
+
+// Global error handler
 app.use((err, req, res, next) => {
   console.error('❌ Unhandled Error:', err.stack);
   const status = err.status || 500;
-  res.status(status).json({ error: 'Internal server error' });
-});
-
-// 404 handler (Express 5 safe - no wildcard)
-app.use((req, res) => {
-  res.status(404).json({ error: 'Route not found', path: req.originalUrl });
+  res.status(status).json({ 
+    error: 'Internal server error',
+    requestId: req.id
+  });
 });
 
 // ====================
@@ -144,6 +185,7 @@ async function initializeDatabase() {
   try {
     console.log('📦 Initializing SmartClass database...');
     
+    // Subscriptions table
     await client.query(`
       CREATE TABLE IF NOT EXISTS smartclass_subscriptions (
         id SERIAL PRIMARY KEY,
@@ -157,7 +199,9 @@ async function initializeDatabase() {
         UNIQUE(user_id)
       )
     `);
+    console.log('✅ Subscriptions table ready');
     
+    // Payment tracking table
     await client.query(`
       CREATE TABLE IF NOT EXISTS smartclass_subscription_payments (
         id SERIAL PRIMARY KEY,
@@ -171,14 +215,60 @@ async function initializeDatabase() {
         UNIQUE(checkout_id)
       )
     `);
+    console.log('✅ Payment tracking table ready');
+    
+    // Support tickets table (NEW)
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS support_tickets (
+        id SERIAL PRIMARY KEY,
+        user_id VARCHAR(255),
+        user_name VARCHAR(255),
+        user_email VARCHAR(255),
+        subject VARCHAR(255),
+        message TEXT,
+        status VARCHAR(20) DEFAULT 'open',
+        created_at TIMESTAMP DEFAULT NOW(),
+        resolved_at TIMESTAMP
+      )
+    `);
+    console.log('✅ Support tickets table ready');
+    
+    // Notification settings table (NEW)
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS user_notifications (
+        id SERIAL PRIMARY KEY,
+        user_id VARCHAR(255) NOT NULL,
+        enabled BOOLEAN DEFAULT false,
+        updated_at TIMESTAMP DEFAULT NOW(),
+        UNIQUE(user_id)
+      )
+    `);
+    console.log('✅ Notification settings table ready');
     
     console.log('✅ Database initialization complete');
+    
   } catch (err) {
     console.error('❌ Database init error:', err);
   } finally {
     client.release();
   }
 }
+
+// ====================
+// GRACEFUL SHUTDOWN
+// ====================
+process.on('SIGTERM', () => {
+  console.log('👋 SIGTERM received. Shutting down gracefully...');
+  app.close(() => {
+    console.log('✅ Server closed');
+    process.exit(0);
+  });
+});
+
+process.on('SIGINT', () => {
+  console.log('👋 SIGINT received. Shutting down gracefully...');
+  process.exit(0);
+});
 
 // ====================
 // START SERVER
@@ -189,6 +279,7 @@ async function initializeDatabase() {
     
     app.listen(PORT, () => {
       console.log(`\n🚀 SMARTCLASS API RUNNING ON PORT ${PORT}`);
+      console.log(`✅ Environment: ${process.env.NODE_ENV || 'development'}`);
       console.log(`✅ Ready for production\n`);
     });
     
