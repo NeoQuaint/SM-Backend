@@ -114,7 +114,7 @@ const subjectsRoutes = require('./routes/subjects');
 const tutorsRoutes = require('./routes/tutors');
 const matchingRoutes = require('./routes/matching');
 const packagesRoutes = require('./routes/packages');
-const subscriptionsRoutes = require('./routes/subscriptions');
+
 const sessionsRoutes = require('./routes/sessions');
 const messagesRoutes = require('./routes/messages');
 const reviewsRoutes = require('./routes/reviews');
@@ -147,7 +147,7 @@ app.use('/api/subjects', subjectsRoutes);
 app.use('/api/tutors', tutorsRoutes);
 app.use('/api/match-tutors', matchingRoutes);
 app.use('/api/packages', packagesRoutes);
-app.use('/api/subscriptions', subscriptionsRoutes);
+
 app.use('/api/sessions', sessionsRoutes);
 app.use('/api/messages', messagesRoutes);
 app.use('/api/reviews', reviewsRoutes);
