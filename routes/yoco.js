@@ -55,191 +55,6 @@ const yocoFetch = async (url, options, retries = MAX_RETRIES) => {
 };
 
 // ====================
-// CREATE SUBJECT SWAP CHECKOUT (R19)
-// ====================
-router.post('/create-swap-checkout', async (req, res) => {
-  try {
-    const { oldSubject, newSubject, email, userId } = req.body;
-    
-    // Validate subjects
-    if (!oldSubject || !newSubject) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Both oldSubject and newSubject are required' 
-      });
-    }
-    
-    if (oldSubject === newSubject) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Old and new subject cannot be the same' 
-      });
-    }
-    
-    const userIdentifier = userId || email || 'guest';
-    const customerEmail = email || 'student@smartclass.co.za';
-    const amountInCents = SWAP_FEE * 100;
-    
-    const requestBody = {
-      amount: amountInCents,
-      currency: 'ZAR',
-      successUrl: `${FRONTEND_URL}/profile?swap=success&old=${encodeURIComponent(oldSubject)}&new=${encodeURIComponent(newSubject)}`,
-      cancelUrl: `${FRONTEND_URL}/profile?swap=cancelled`,
-      failureUrl: `${FRONTEND_URL}/profile?swap=cancelled`,
-      customer: { 
-        email: customerEmail, 
-        name: 'SmartClass Student' 
-      },
-      metadata: { 
-        userId: String(userIdentifier), 
-        type: 'swap_fee', 
-        oldSubject, 
-        newSubject,
-        description: `Subject Swap: ${oldSubject} → ${newSubject}`
-      }
-    };
-    
-    console.log(`🔄 Creating swap checkout: ${oldSubject} → ${newSubject} for ${userIdentifier}`);
-    
-    const { response, data } = await yocoFetch(YOCO_API, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${YOCO_SECRET_KEY}`
-      },
-      body: JSON.stringify(requestBody)
-    });
-    
-    if (!response.ok) {
-      return res.status(response.status).json({ 
-        success: false, 
-        error: data.message || 'Failed to create swap checkout' 
-      });
-    }
-    
-    if (data.id && data.redirectUrl) {
-      // Save payment record
-      await pool.query(
-        `INSERT INTO smartclass_subscription_payments 
-         (user_id, checkout_id, package, amount, status, created_at)
-         VALUES ($1, $2, 'swap_fee', $3, 'pending', NOW())`,
-        [String(userIdentifier), data.id, SWAP_FEE]
-      );
-      
-      console.log(`✅ Swap checkout created: ${data.id}`);
-      
-      res.json({ 
-        success: true, 
-        checkoutId: data.id, 
-        redirectUrl: data.redirectUrl,
-        amount: SWAP_FEE,
-        oldSubject,
-        newSubject
-      });
-    } else {
-      res.status(500).json({ 
-        success: false, 
-        error: 'No checkout created' 
-      });
-    }
-    
-  } catch (error) {
-    console.error('❌ Create swap checkout error:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: error.message 
-    });
-  }
-});
-
-// ====================
-// VERIFY SWAP PAYMENT
-// ====================
-router.post('/verify-swap-payment', async (req, res) => {
-  try {
-    const { checkoutId, email, userId } = req.body;
-    
-    if (!checkoutId) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Checkout ID required' 
-      });
-    }
-    
-    console.log(`🔍 Verifying swap payment: ${checkoutId}`);
-    
-    const { response, data: checkout } = await yocoFetch(
-      `${YOCO_API}/${checkoutId}`,
-      {
-        headers: { 
-          'Authorization': `Bearer ${YOCO_SECRET_KEY}` 
-        }
-      }
-    );
-    
-    if (!response.ok) {
-      return res.status(500).json({ 
-        success: false, 
-        error: 'Failed to verify payment' 
-      });
-    }
-    
-    if (checkout.status === 'COMPLETED' || checkout.status === 'completed') {
-      const userIdentifier = userId || email || 'guest';
-      const metadata = checkout.metadata || {};
-      const oldSubject = metadata.oldSubject;
-      const newSubject = metadata.newSubject;
-      
-      // Update payment status
-      await pool.query(
-        `UPDATE smartclass_subscription_payments 
-         SET status = 'completed', completed_at = NOW() 
-         WHERE checkout_id = $1`,
-        [checkoutId]
-      );
-      
-      console.log(`✅ Swap payment completed: ${oldSubject} → ${newSubject}`);
-      
-      res.json({ 
-        success: true, 
-        swapCompleted: true,
-        oldSubject,
-        newSubject,
-        message: 'Subject swap payment successful'
-      });
-      
-    } else if (checkout.status === 'PENDING' || checkout.status === 'pending') {
-      res.json({ 
-        success: false, 
-        status: 'pending', 
-        message: 'Payment still processing' 
-      });
-    } else {
-      // Update payment as failed
-      await pool.query(
-        `UPDATE smartclass_subscription_payments 
-         SET status = 'failed' 
-         WHERE checkout_id = $1`,
-        [checkoutId]
-      );
-      
-      res.json({ 
-        success: false, 
-        status: checkout.status, 
-        message: 'Payment not completed' 
-      });
-    }
-    
-  } catch (error) {
-    console.error('❌ Verify swap payment error:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: error.message 
-    });
-  }
-});
-
-// ====================
 // CREATE SUBSCRIPTION CHECKOUT (Basic R39 / Standard R59)
 // ====================
 router.post('/create-subscription-checkout', async (req, res) => {
@@ -332,7 +147,104 @@ router.post('/create-subscription-checkout', async (req, res) => {
 });
 
 // ====================
-// VERIFY SUBSCRIPTION PAYMENT
+// CREATE SUBJECT SWAP CHECKOUT (R19)
+// ====================
+router.post('/create-swap-checkout', async (req, res) => {
+  try {
+    const { oldSubject, newSubject, email, userId } = req.body;
+    
+    // Validate subjects
+    if (!oldSubject || !newSubject) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Both oldSubject and newSubject are required' 
+      });
+    }
+    
+    if (oldSubject === newSubject) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Old and new subject cannot be the same' 
+      });
+    }
+    
+    const userIdentifier = userId || email || 'guest';
+    const customerEmail = email || 'student@smartclass.co.za';
+    const amountInCents = SWAP_FEE * 100;
+    
+    const requestBody = {
+      amount: amountInCents,
+      currency: 'ZAR',
+      successUrl: `${FRONTEND_URL}/profile?swap=success&old=${encodeURIComponent(oldSubject)}&new=${encodeURIComponent(newSubject)}`,
+      cancelUrl: `${FRONTEND_URL}/profile?swap=cancelled`,
+      failureUrl: `${FRONTEND_URL}/profile?swap=cancelled`,
+      customer: { 
+        email: customerEmail, 
+        name: 'SmartClass Student' 
+      },
+      metadata: { 
+        userId: String(userIdentifier), 
+        type: 'swap_fee', 
+        oldSubject, 
+        newSubject,
+        description: `Subject Swap: ${oldSubject} → ${newSubject}`
+      }
+    };
+    
+    console.log(`🔄 Creating swap checkout: ${oldSubject} → ${newSubject} for ${userIdentifier}`);
+    
+    const { response, data } = await yocoFetch(YOCO_API, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${YOCO_SECRET_KEY}`
+      },
+      body: JSON.stringify(requestBody)
+    });
+    
+    if (!response.ok) {
+      return res.status(response.status).json({ 
+        success: false, 
+        error: data.message || 'Failed to create swap checkout' 
+      });
+    }
+    
+    if (data.id && data.redirectUrl) {
+      await pool.query(
+        `INSERT INTO smartclass_subscription_payments 
+         (user_id, checkout_id, package, amount, status, created_at)
+         VALUES ($1, $2, 'swap_fee', $3, 'pending', NOW())`,
+        [String(userIdentifier), data.id, SWAP_FEE]
+      );
+      
+      console.log(`✅ Swap checkout created: ${data.id}`);
+      
+      res.json({ 
+        success: true, 
+        checkoutId: data.id, 
+        redirectUrl: data.redirectUrl,
+        amount: SWAP_FEE,
+        oldSubject,
+        newSubject
+      });
+    } else {
+      res.status(500).json({ 
+        success: false, 
+        error: 'No checkout created' 
+      });
+    }
+    
+  } catch (error) {
+    console.error('❌ Create swap checkout error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// ====================
+// VERIFY PAYMENT (Works for both subscription and swap)
 // ====================
 router.post('/verify-payment', async (req, res) => {
   try {
@@ -453,6 +365,92 @@ router.post('/verify-payment', async (req, res) => {
 });
 
 // ====================
+// VERIFY SWAP PAYMENT (Specific endpoint)
+// ====================
+router.post('/verify-swap-payment', async (req, res) => {
+  try {
+    const { checkoutId, email, userId } = req.body;
+    
+    if (!checkoutId) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Checkout ID required' 
+      });
+    }
+    
+    console.log(`🔍 Verifying swap payment: ${checkoutId}`);
+    
+    const { response, data: checkout } = await yocoFetch(
+      `${YOCO_API}/${checkoutId}`,
+      {
+        headers: { 
+          'Authorization': `Bearer ${YOCO_SECRET_KEY}` 
+        }
+      }
+    );
+    
+    if (!response.ok) {
+      return res.status(500).json({ 
+        success: false, 
+        error: 'Failed to verify payment' 
+      });
+    }
+    
+    if (checkout.status === 'COMPLETED' || checkout.status === 'completed') {
+      const userIdentifier = userId || email || 'guest';
+      const metadata = checkout.metadata || {};
+      const oldSubject = metadata.oldSubject;
+      const newSubject = metadata.newSubject;
+      
+      // Update payment status
+      await pool.query(
+        `UPDATE smartclass_subscription_payments 
+         SET status = 'completed', completed_at = NOW() 
+         WHERE checkout_id = $1`,
+        [checkoutId]
+      );
+      
+      console.log(`✅ Swap payment completed: ${oldSubject} → ${newSubject}`);
+      
+      res.json({ 
+        success: true, 
+        swapCompleted: true,
+        oldSubject,
+        newSubject,
+        message: 'Subject swap payment successful'
+      });
+      
+    } else if (checkout.status === 'PENDING' || checkout.status === 'pending') {
+      res.json({ 
+        success: false, 
+        status: 'pending', 
+        message: 'Payment still processing' 
+      });
+    } else {
+      await pool.query(
+        `UPDATE smartclass_subscription_payments 
+         SET status = 'failed' 
+         WHERE checkout_id = $1`,
+        [checkoutId]
+      );
+      
+      res.json({ 
+        success: false, 
+        status: checkout.status, 
+        message: 'Payment not completed' 
+      });
+    }
+    
+  } catch (error) {
+    console.error('❌ Verify swap payment error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// ====================
 // CHECK SUBSCRIPTION STATUS
 // ====================
 router.get('/check-subscription', async (req, res) => {
@@ -546,7 +544,7 @@ router.get('/check-latest-payment', async (req, res) => {
 });
 
 // ====================
-// CANCEL SUBSCRIPTION
+// CANCEL SUBSCRIPTION (Yoco endpoint)
 // ====================
 router.post('/cancel-subscription', async (req, res) => {
   try {
@@ -566,7 +564,7 @@ router.post('/cancel-subscription', async (req, res) => {
       [String(userId)]
     );
     
-    console.log(`✅ Subscription cancelled for ${userId}`);
+    console.log(`✅ Subscription cancelled for ${userId} (via yoco route)`);
     
     res.json({ 
       success: true, 
@@ -583,7 +581,7 @@ router.post('/cancel-subscription', async (req, res) => {
 });
 
 // ====================
-// DOWNGRADE TO BASIC
+// DOWNGRADE TO BASIC (Yoco endpoint)
 // ====================
 router.post('/downgrade-basic', async (req, res) => {
   try {
@@ -603,7 +601,7 @@ router.post('/downgrade-basic', async (req, res) => {
       [String(userId)]
     );
     
-    console.log(`✅ Downgraded to Basic for ${userId}`);
+    console.log(`✅ Downgraded to Basic for ${userId} (via yoco route)`);
     
     res.json({ 
       success: true, 

@@ -121,7 +121,8 @@ const reviewsRoutes = require('./routes/reviews');
 const analyticsRoutes = require('./routes/analytics');
 const neoRoutes = require('./routes/neo');
 const yocoRoutes = require('./routes/yoco');
-const supportRoutes = require('./routes/support'); // NEW - Support route
+const supportRoutes = require('./routes/support');
+const subscriptionRoutes = require('./routes/subscription'); // NEW - Subscription management
 
 app.get('/', (req, res) => {
   res.json({ 
@@ -153,7 +154,8 @@ app.use('/api/reviews', reviewsRoutes);
 app.use('/api/track-event', analyticsRoutes);
 app.use('/api/neo', neoRoutes);
 app.use('/api/yoco', yocoRoutes);
-app.use('/api/support', supportRoutes); // NEW - Support route
+app.use('/api/support', supportRoutes);
+app.use('/api/subscription', subscriptionRoutes); // NEW - Subscription management
 
 // ====================
 // ERROR HANDLERS
@@ -217,7 +219,7 @@ async function initializeDatabase() {
     `);
     console.log('✅ Payment tracking table ready');
     
-    // Support tickets table (NEW)
+    // Support tickets table
     await client.query(`
       CREATE TABLE IF NOT EXISTS support_tickets (
         id SERIAL PRIMARY KEY,
@@ -233,7 +235,7 @@ async function initializeDatabase() {
     `);
     console.log('✅ Support tickets table ready');
     
-    // Notification settings table (NEW)
+    // Notification settings table
     await client.query(`
       CREATE TABLE IF NOT EXISTS user_notifications (
         id SERIAL PRIMARY KEY,
