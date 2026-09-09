@@ -79,7 +79,7 @@ router.post('/create-subscription-checkout', async (req, res) => {
     const requestBody = {
       amount: amountInCents,
       currency: 'ZAR',
-      successUrl: `${FRONTEND_URL}/payment/success?package=${packageKey}`,
+      successUrl: `${FRONTEND_URL}/payment-success?package=${packageKey}`,
       cancelUrl: `${FRONTEND_URL}/payment/cancel`,
       failureUrl: `${FRONTEND_URL}/payment/cancel`,
       customer: { 
