@@ -29,7 +29,7 @@ router.post('/register', async (req, res) => {
     const result = await pool.query(
       `INSERT INTO users (email, password_hash, full_name, auth_provider) 
        VALUES ($1, $2, $3, 'email') 
-       RETURNING id, email, full_name, avatar, grade, subjects, onboarding_complete`,
+       RETURNING id, email, full_name, avatar, grade, subjects, onboarding_complete, notifications_enabled`,
       [email, password_hash, full_name || '']
     );
 
@@ -51,7 +51,8 @@ router.post('/register', async (req, res) => {
         avatar: user.avatar,
         grade: user.grade,
         subjects: user.subjects || [],
-        onboarding_complete: user.onboarding_complete
+        onboarding_complete: user.onboarding_complete,
+        notifications_enabled: user.notifications_enabled
       }
     });
 
@@ -104,7 +105,8 @@ router.post('/login', async (req, res) => {
         avatar: user.avatar,
         grade: user.grade,
         subjects: user.subjects || [],
-        onboarding_complete: user.onboarding_complete
+        onboarding_complete: user.onboarding_complete,
+        notifications_enabled: user.notifications_enabled
       }
     });
 
@@ -126,7 +128,6 @@ router.post('/google', async (req, res) => {
     console.log('🔐 Verifying Google credential...');
     console.log('GOOGLE_CLIENT_ID:', GOOGLE_CLIENT_ID ? 'Set ✓' : 'NOT SET ❌');
     
-    // Verify Google token
     const ticket = await googleClient.verifyIdToken({
       idToken: credential,
       audience: GOOGLE_CLIENT_ID
@@ -143,7 +144,6 @@ router.post('/google', async (req, res) => {
       return res.status(400).json({ status: 'error', error: 'No email from Google.' });
     }
 
-    // Check if user exists
     const existing = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
 
     let user;
@@ -151,16 +151,14 @@ router.post('/google', async (req, res) => {
     if (existing.rows.length > 0) {
       user = existing.rows[0];
       
-      // Update google_id if not set
       if (!user.google_id) {
         await pool.query('UPDATE users SET google_id = $1, auth_provider = $2 WHERE id = $3', [googleId, 'google', user.id]);
       }
     } else {
-      // Create new user with Google
       const result = await pool.query(
         `INSERT INTO users (email, full_name, google_id, auth_provider) 
          VALUES ($1, $2, $3, 'google') 
-         RETURNING id, email, full_name, avatar, grade, subjects, onboarding_complete`,
+         RETURNING id, email, full_name, avatar, grade, subjects, onboarding_complete, notifications_enabled`,
         [email, fullName || '', googleId]
       );
 
@@ -183,7 +181,8 @@ router.post('/google', async (req, res) => {
         avatar: user.avatar,
         grade: user.grade,
         subjects: user.subjects || [],
-        onboarding_complete: user.onboarding_complete
+        onboarding_complete: user.onboarding_complete,
+        notifications_enabled: user.notifications_enabled
       }
     });
 
@@ -198,7 +197,7 @@ router.post('/google', async (req, res) => {
 router.get('/me', authMiddleware, async (req, res) => {
   try {
     const result = await pool.query(
-      'SELECT id, email, full_name, avatar, grade, subjects, onboarding_complete FROM users WHERE id = $1',
+      'SELECT id, email, full_name, avatar, grade, subjects, onboarding_complete, notifications_enabled FROM users WHERE id = $1',
       [req.user.id]
     );
 
@@ -211,6 +210,99 @@ router.get('/me', authMiddleware, async (req, res) => {
   } catch (error) {
     console.error('Get me error:', error);
     res.status(500).json({ status: 'error', error: 'Failed to get user.' });
+  }
+});
+
+// POST /api/auth/complete-onboarding
+router.post('/complete-onboarding', authMiddleware, async (req, res) => {
+  const { subjects, grade, avatar, full_name, notifications_enabled } = req.body;
+
+  try {
+    const result = await pool.query(
+      `UPDATE users 
+       SET subjects = $1, 
+           grade = $2, 
+           avatar = $3, 
+           full_name = $4,
+           notifications_enabled = $5,
+           onboarding_complete = true,
+           updated_at = NOW()
+       WHERE id = $6
+       RETURNING id, email, full_name, avatar, grade, subjects, onboarding_complete, notifications_enabled`,
+      [
+        subjects || [],
+        grade || null,
+        avatar || 'AVO',
+        full_name || '',
+        notifications_enabled || false,
+        req.user.id
+      ]
+    );
+
+    console.log(`✅ Onboarding completed for user ${req.user.id}`);
+
+    res.json({ 
+      status: 'success', 
+      user: result.rows[0] 
+    });
+
+  } catch (error) {
+    console.error('Complete onboarding error:', error);
+    res.status(500).json({ status: 'error', error: 'Failed to complete onboarding.' });
+  }
+});
+
+// PUT /api/auth/update-subjects
+router.put('/update-subjects', authMiddleware, async (req, res) => {
+  const { subjects } = req.body;
+
+  if (!Array.isArray(subjects)) {
+    return res.status(400).json({ status: 'error', error: 'Subjects must be an array.' });
+  }
+
+  try {
+    const result = await pool.query(
+      `UPDATE users 
+       SET subjects = $1, updated_at = NOW()
+       WHERE id = $2
+       RETURNING id, email, subjects`,
+      [subjects, req.user.id]
+    );
+
+    console.log(`✅ Subjects updated for user ${req.user.id}:`, subjects);
+
+    res.json({ 
+      status: 'success', 
+      user: result.rows[0] 
+    });
+
+  } catch (error) {
+    console.error('Update subjects error:', error);
+    res.status(500).json({ status: 'error', error: 'Failed to update subjects.' });
+  }
+});
+
+// PUT /api/auth/update-notifications
+router.put('/update-notifications', authMiddleware, async (req, res) => {
+  const { enabled } = req.body;
+
+  try {
+    const result = await pool.query(
+      `UPDATE users 
+       SET notifications_enabled = $1, updated_at = NOW()
+       WHERE id = $2
+       RETURNING id, notifications_enabled`,
+      [enabled, req.user.id]
+    );
+
+    res.json({ 
+      status: 'success', 
+      notifications_enabled: result.rows[0].notifications_enabled 
+    });
+
+  } catch (error) {
+    console.error('Update notifications error:', error);
+    res.status(500).json({ status: 'error', error: 'Failed to update notifications.' });
   }
 });
 
