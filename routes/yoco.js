@@ -147,7 +147,6 @@ router.post('/create-subscription-checkout', async (req, res) => {
 
 // ====================
 // CREATE SUBJECT SWAP CHECKOUT (R19)
-// Redirects to /swap-success (dedicated page)
 // ====================
 router.post('/create-swap-checkout', async (req, res) => {
   try {
@@ -253,9 +252,9 @@ router.post('/auto-verify-latest', async (req, res) => {
       return res.status(400).json({ success: false, error: 'userId required' });
     }
     
-    console.log(`🔍 Auto-verifying latest pending for: ${userId}`);
+    console.log(`🔍 Auto-verifying latest subscription for: ${userId}`);
     
-    // Get latest pending SUBSCRIPTION payment (not swap)
+    // Get latest pending SUBSCRIPTION payment only (not swap)
     const pendingResult = await pool.query(
       `SELECT checkout_id, package, amount 
        FROM smartclass_subscription_payments 
@@ -282,19 +281,20 @@ router.post('/auto-verify-latest', async (req, res) => {
           subscription: {
             package: sub.package,
             amount: parseFloat(sub.amount),
-            subjectsAllowed: sub.package === 'Standard' ? 4 : 2
+            subjectsAllowed: sub.package === 'Standard' ? 4 : 2,
+            subjects: sub.subjects || []
           }
         });
       }
       
-      console.log(`⚠️ No pending subscription payment found for ${userId}`);
+      console.log(`⚠️ No pending subscription payment for ${userId}`);
       return res.json({ success: false, message: 'No pending payment found' });
     }
     
     const payment = pendingResult.rows[0];
     const checkoutId = payment.checkout_id;
     
-    console.log(`🎯 Found pending checkout: ${checkoutId}`);
+    console.log(`🎯 Verifying checkout: ${checkoutId}`);
     
     // Verify with Yoco
     const { response, data: checkout } = await yocoFetch(
@@ -333,7 +333,7 @@ router.post('/auto-verify-latest', async (req, res) => {
           updated_at = NOW()
       `, [String(userId), pkg, amount, checkoutId]);
       
-      console.log(`✅ Auto-verified subscription: ${userId} → ${pkg} (R${amount})`);
+      console.log(`✅ Auto-verified subscription: ${userId} → ${pkg}`);
       
       return res.json({
         success: true,
@@ -374,10 +374,9 @@ router.post('/auto-verify-swap', async (req, res) => {
     
     console.log(`🔄 Auto-verifying latest swap for: ${userId}`);
     
-    // Get latest pending swap payment
+    // Get latest PENDING swap payment ONLY
     const pendingResult = await pool.query(
-      `SELECT checkout_id 
-       FROM smartclass_subscription_payments 
+      `SELECT checkout_id FROM smartclass_subscription_payments 
        WHERE user_id = $1 AND package = 'swap_fee' AND status = 'pending' 
        ORDER BY created_at DESC 
        LIMIT 1`,
@@ -385,27 +384,12 @@ router.post('/auto-verify-swap', async (req, res) => {
     );
     
     if (pendingResult.rows.length === 0) {
-      // Check if there's a recent completed swap
-      const completedResult = await pool.query(
-        `SELECT checkout_id FROM smartclass_subscription_payments 
-         WHERE user_id = $1 AND package = 'swap_fee' AND status = 'completed' 
-         ORDER BY completed_at DESC LIMIT 1`,
-        [String(userId)]
-      );
-      
-      if (completedResult.rows.length > 0) {
-        return res.json({ 
-          success: true, 
-          swapCompleted: true,
-          message: 'Swap already completed'
-        });
-      }
-      
+      console.log(`⚠️ No pending swap for ${userId}`);
       return res.json({ success: false, message: 'No pending swap found' });
     }
     
     const checkoutId = pendingResult.rows[0].checkout_id;
-    console.log(`🎯 Found pending swap checkout: ${checkoutId}`);
+    console.log(`🎯 Verifying swap checkout: ${checkoutId}`);
     
     // Verify with Yoco
     const { response, data: checkout } = await yocoFetch(
@@ -424,6 +408,13 @@ router.post('/auto-verify-swap', async (req, res) => {
       const oldSubject = metadata.oldSubject;
       const newSubject = metadata.newSubject;
       
+      console.log(`🔄 Metadata: ${oldSubject} → ${newSubject}`);
+      
+      if (!oldSubject || !newSubject) {
+        console.error('❌ Swap metadata missing');
+        return res.json({ success: false, error: 'Swap metadata missing' });
+      }
+      
       // 1. Mark payment as completed
       await pool.query(
         `UPDATE smartclass_subscription_payments 
@@ -432,50 +423,49 @@ router.post('/auto-verify-swap', async (req, res) => {
         [checkoutId]
       );
       
-      // 2. Update user's subjects in DB
-      if (oldSubject && newSubject) {
-        const userResult = await pool.query(
-          `SELECT subjects FROM users WHERE email = $1`,
-          [String(userId)]
-        );
-        
-        if (userResult.rows.length > 0) {
-          const currentSubjects = userResult.rows[0].subjects || [];
-          const updatedSubjects = currentSubjects.map(s => 
-            s === oldSubject ? newSubject : s
-          );
-          
-          // Update users table
-          await pool.query(
-            `UPDATE users SET subjects = $1, updated_at = NOW() WHERE email = $2`,
-            [updatedSubjects, String(userId)]
-          );
-          
-          // Update subscriptions table
-          await pool.query(
-            `UPDATE smartclass_subscriptions 
-             SET subjects = $1, updated_at = NOW() 
-             WHERE user_id = $2`,
-            [updatedSubjects, String(userId)]
-          );
-          
-          console.log(`✅ Swap done: ${oldSubject} → ${newSubject} for ${userId}`);
-          
-          return res.json({ 
-            success: true, 
-            swapCompleted: true,
-            oldSubject,
-            newSubject,
-            subjects: updatedSubjects
-          });
-        }
+      // 2. Get current user subjects
+      const userResult = await pool.query(
+        `SELECT subjects FROM users WHERE email = $1`,
+        [String(userId)]
+      );
+      
+      if (userResult.rows.length === 0) {
+        return res.json({ success: false, error: 'User not found' });
       }
+      
+      const currentSubjects = userResult.rows[0].subjects || [];
+      
+      if (!currentSubjects.includes(oldSubject)) {
+        console.error(`❌ User doesn't have ${oldSubject}`);
+        return res.json({ success: false, error: `${oldSubject} not in user subjects` });
+      }
+      
+      const updatedSubjects = currentSubjects.map(s => 
+        s === oldSubject ? newSubject : s
+      );
+      
+      // 3. Update users table
+      await pool.query(
+        `UPDATE users SET subjects = $1, updated_at = NOW() WHERE email = $2`,
+        [updatedSubjects, String(userId)]
+      );
+      
+      // 4. Update subscriptions table
+      await pool.query(
+        `UPDATE smartclass_subscriptions 
+         SET subjects = $1, updated_at = NOW() 
+         WHERE user_id = $2`,
+        [updatedSubjects, String(userId)]
+      );
+      
+      console.log(`✅ Swap completed: ${oldSubject} → ${newSubject}`);
       
       return res.json({ 
         success: true, 
         swapCompleted: true,
         oldSubject,
-        newSubject
+        newSubject,
+        subjects: updatedSubjects
       });
       
     } else if (checkout.status === 'PENDING' || checkout.status === 'pending') {
@@ -485,7 +475,7 @@ router.post('/auto-verify-swap', async (req, res) => {
         `UPDATE smartclass_subscription_payments SET status = 'failed' WHERE checkout_id = $1`,
         [checkoutId]
       );
-      return res.json({ success: false, status: checkout.status, message: 'Payment not completed' });
+      return res.json({ success: false, status: checkout.status, message: 'Payment failed' });
     }
     
   } catch (error) {
@@ -554,7 +544,7 @@ router.post('/verify-payment', async (req, res) => {
             updated_at = NOW()
         `, [String(userIdentifier), pkg, amount, checkoutId]);
         
-        console.log(`✅ Subscription activated: ${userIdentifier} → ${pkg} (R${amount})`);
+        console.log(`✅ Subscription activated: ${userIdentifier} → ${pkg}`);
         
         res.json({ 
           success: true, 
