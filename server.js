@@ -48,6 +48,12 @@ const supportLimiter = rateLimit({
   message: { error: 'Too many support requests. Please try again later.' },
 });
 
+const adminLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  message: { error: 'Too many admin requests. Please try again later.' },
+});
+
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -80,12 +86,15 @@ const corsOptions = {
     'http://localhost:3000',
     'http://localhost:3001',
     'http://localhost:5000',
+    'http://localhost:5173',   // Vite default
     'https://www.smartclasss.com',
     'https://smartclasss.com',
-    'https://smartclass-wlgb.onrender.com'
+    'https://smartclass-wlgb.onrender.com',
+    // Vercel admin - add your domain here after deploy
+    /\.vercel\.app$/
   ],
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 };
 
@@ -105,6 +114,7 @@ app.use('/api/', apiLimiter);
 app.use('/api/auth/', authLimiter);
 app.use('/api/yoco/', paymentLimiter);
 app.use('/api/support/', supportLimiter);
+app.use('/api/admin/', adminLimiter);
 
 // ====================
 // ROUTES
@@ -114,7 +124,6 @@ const subjectsRoutes = require('./routes/subjects');
 const tutorsRoutes = require('./routes/tutors');
 const matchingRoutes = require('./routes/matching');
 const packagesRoutes = require('./routes/packages');
-
 const sessionsRoutes = require('./routes/sessions');
 const messagesRoutes = require('./routes/messages');
 const reviewsRoutes = require('./routes/reviews');
@@ -122,7 +131,9 @@ const analyticsRoutes = require('./routes/analytics');
 const neoRoutes = require('./routes/neo');
 const yocoRoutes = require('./routes/yoco');
 const supportRoutes = require('./routes/support');
-const subscriptionRoutes = require('./routes/subscription'); // NEW - Subscription management
+const subscriptionRoutes = require('./routes/subscription');
+const adminAuthRoutes = require('./routes/adminAuth');
+const adminRoutes = require('./routes/admin');
 
 app.get('/', (req, res) => {
   res.json({ 
@@ -147,7 +158,6 @@ app.use('/api/subjects', subjectsRoutes);
 app.use('/api/tutors', tutorsRoutes);
 app.use('/api/match-tutors', matchingRoutes);
 app.use('/api/packages', packagesRoutes);
-
 app.use('/api/sessions', sessionsRoutes);
 app.use('/api/messages', messagesRoutes);
 app.use('/api/reviews', reviewsRoutes);
@@ -155,12 +165,13 @@ app.use('/api/track-event', analyticsRoutes);
 app.use('/api/neo', neoRoutes);
 app.use('/api/yoco', yocoRoutes);
 app.use('/api/support', supportRoutes);
-app.use('/api/subscription', subscriptionRoutes); // NEW - Subscription management
+app.use('/api/subscription', subscriptionRoutes);
+app.use('/api/admin/auth', adminAuthRoutes);
+app.use('/api/admin', adminRoutes);
 
 // ====================
 // ERROR HANDLERS
 // ====================
-// 404 handler
 app.use((req, res, next) => {
   res.status(404).json({ 
     error: 'Route not found', 
@@ -169,7 +180,6 @@ app.use((req, res, next) => {
   });
 });
 
-// Global error handler
 app.use((err, req, res, next) => {
   console.error('❌ Unhandled Error:', err.stack);
   const status = err.status || 500;
@@ -246,6 +256,19 @@ async function initializeDatabase() {
       )
     `);
     console.log('✅ Notification settings table ready');
+    
+    // Admins table (NEW)
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS admins (
+        id SERIAL PRIMARY KEY,
+        email VARCHAR(255) NOT NULL UNIQUE,
+        password_hash VARCHAR(255) NOT NULL,
+        full_name VARCHAR(255),
+        is_super_admin BOOLEAN DEFAULT false,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    console.log('✅ Admins table ready');
     
     console.log('✅ Database initialization complete');
     
