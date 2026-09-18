@@ -8,9 +8,9 @@ const openai = new OpenAI({
   baseURL: 'https://api.deepseek.com/v1',
 });
 
-// ElevenLabs Configuration - Jessica
-const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY || 'sk_ba09732f52a6b3b2c4287daeb995841cf36e4180b8c06f2a';
-const ELEVENLABS_VOICE_ID = process.env.ELEVENLABS_VOICE_ID || 'cgSgspJ2msm6clMCkdW9'; // Jessica
+// Kokoro TTS via DeepInfra
+const DEEPINFRA_API_KEY = process.env.DEEPINFRA_API_KEY;
+const KOKORO_VOICE_ID = process.env.KOKORO_VOICE_ID || 'af_heart';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
 const performanceDescriptions = {
@@ -106,7 +106,7 @@ Think: the hill goes up 3 for every 2 steps. Try again!"`;
 });
 
 // ==========================================
-// NEO SPEAK — ElevenLabs (Jessica) - CREDIT SAVING
+// NEO SPEAK — Kokoro via DeepInfra
 // ==========================================
 router.post('/speak', async (req, res) => {
   try {
@@ -116,45 +116,44 @@ router.post('/speak', async (req, res) => {
       return res.status(400).json({ error: 'Text is required' });
     }
 
-    // STRICTER truncation - saves credits
+    // Keep truncation — Kokoro is cheap but no reason to send huge blobs
     let cleanText = text.replace(/[^a-zA-Z0-9\s.,!?()=+\-']/g, '');
-    if (cleanText.length > 200) {
-      cleanText = cleanText.substring(0, 200);
+    if (cleanText.length > 500) {
+      cleanText = cleanText.substring(0, 500);
     }
 
     if (!cleanText.trim()) {
       return res.status(400).json({ error: 'No valid text to speak' });
     }
 
-    console.log('Neo speaking (Jessica):', cleanText.substring(0, 100));
+    if (!DEEPINFRA_API_KEY) {
+      console.error('DEEPINFRA_API_KEY is not set');
+      return res.status(500).json({ error: 'TTS not configured' });
+    }
+
+    console.log('Neo speaking (Kokoro):', cleanText.substring(0, 100));
 
     const response = await fetch(
-      `https://api.elevenlabs.io/v1/text-to-speech/${ELEVENLABS_VOICE_ID}`,
+      `https://api.deepinfra.com/v1/text-to-speech/${KOKORO_VOICE_ID}`,
       {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'xi-api-key': ELEVENLABS_API_KEY,
-          'Accept': 'audio/mpeg',
+          'Authorization': `Bearer ${DEEPINFRA_API_KEY}`,
         },
         body: JSON.stringify({
           text: cleanText,
-          model_id: 'eleven_turbo_v2_5',
-          voice_settings: {
-            stability: 0.4,
-            similarity_boost: 0.8,
-            style: 0.3,
-            use_speaker_boost: true,
-          },
+          model_id: 'hexgrad/Kokoro-82M',
+          output_format: 'mp3',
         }),
       }
     );
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('ElevenLabs error:', response.status, errorText);
+      console.error('DeepInfra Kokoro error:', response.status, errorText);
       return res.status(response.status).json({ 
-        error: 'ElevenLabs failed', 
+        error: 'Kokoro TTS failed', 
         details: errorText 
       });
     }
