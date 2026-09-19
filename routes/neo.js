@@ -528,4 +528,47 @@ router.get('/health', (req, res) => {
   res.json({ status: 'Neo route is awake', cacheSize: audioCache.size });
 });
 
+// ==========================================
+// WARM CACHE ON STARTUP
+// ==========================================
+setTimeout(async () => {
+  console.log('🔥 Warming Kokoro worker on startup...');
+
+  const warmupTexts = [
+    'Hello.',
+    "Let's get started.",
+    'Welcome to SmartClass.',
+  ];
+
+  for (const text of warmupTexts) {
+    try {
+      const response = await fetch(
+        `https://api.deepinfra.com/v1/text-to-speech/${KOKORO_VOICE_ID}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${DEEPINFRA_API_KEY}`,
+          },
+          body: JSON.stringify({
+            text,
+            model_id: 'hexgrad/Kokoro-82M',
+            output_format: 'mp3',
+          }),
+        }
+      );
+
+      if (response.ok) {
+        const buffer = Buffer.from(await response.arrayBuffer());
+        setCached(`${KOKORO_VOICE_ID}::${text}`, buffer);
+        console.log(`🔥 Warmed: "${text}"`);
+      }
+    } catch (err) {
+      console.log('Warmup error:', err.message);
+    }
+  }
+
+  console.log('✅ Cache warmup complete');
+}, 3000);
+
 module.exports = router;
