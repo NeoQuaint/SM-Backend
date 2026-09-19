@@ -13,6 +13,31 @@ const DEEPINFRA_API_KEY = process.env.DEEPINFRA_API_KEY;
 const KOKORO_VOICE_ID = process.env.KOKORO_VOICE_ID || 'af_heart';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
+// ==========================================
+// AUDIO CACHE — avoids re-generating identical text
+// ==========================================
+const audioCache = new Map();
+const MAX_CACHE_SIZE = 1000;
+const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+function getCached(key) {
+  const entry = audioCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.timestamp > CACHE_TTL_MS) {
+    audioCache.delete(key);
+    return null;
+  }
+  return entry.buffer;
+}
+
+function setCached(key, buffer) {
+  if (audioCache.size >= MAX_CACHE_SIZE) {
+    const firstKey = audioCache.keys().next().value;
+    audioCache.delete(firstKey);
+  }
+  audioCache.set(key, { buffer, timestamp: Date.now() });
+}
+
 const performanceDescriptions = {
   'Bad': 'struggling significantly and needs foundational help',
   'Fair': 'has basic understanding but needs more practice',
@@ -106,7 +131,7 @@ Think: the hill goes up 3 for every 2 steps. Try again!"`;
 });
 
 // ==========================================
-// NEO SPEAK — Kokoro via DeepInfra
+// NEO SPEAK — Kokoro via DeepInfra (with cache)
 // ==========================================
 router.post('/speak', async (req, res) => {
   try {
@@ -131,7 +156,24 @@ router.post('/speak', async (req, res) => {
       return res.status(500).json({ error: 'TTS not configured' });
     }
 
-    console.log('Neo speaking (Kokoro):', cleanText.substring(0, 100));
+    // ==========================================
+    // CACHE CHECK
+    // ==========================================
+    const cacheKey = `${KOKORO_VOICE_ID}::${cleanText}`;
+    const cachedBuffer = getCached(cacheKey);
+
+    if (cachedBuffer) {
+      console.log('🎯 Cache HIT:', cleanText.substring(0, 60));
+      res.set({
+        'Content-Type': 'audio/mpeg',
+        'Content-Length': cachedBuffer.length,
+        'Cache-Control': 'public, max-age=604800',
+        'X-Cache': 'HIT',
+      });
+      return res.send(cachedBuffer);
+    }
+
+    console.log('🐢 Cache MISS — calling DeepInfra:', cleanText.substring(0, 60));
 
     const response = await fetch(
       `https://api.deepinfra.com/v1/text-to-speech/${KOKORO_VOICE_ID}`,
@@ -158,20 +200,36 @@ router.post('/speak', async (req, res) => {
       });
     }
 
-    const audioBuffer = await response.arrayBuffer();
+    const audioBuffer = Buffer.from(await response.arrayBuffer());
+
+    // Store in cache
+    setCached(cacheKey, audioBuffer);
     
     res.set({
       'Content-Type': 'audio/mpeg',
-      'Content-Length': audioBuffer.byteLength,
-      'Cache-Control': 'no-cache',
+      'Content-Length': audioBuffer.length,
+      'Cache-Control': 'public, max-age=604800',
+      'X-Cache': 'MISS',
     });
     
-    res.send(Buffer.from(audioBuffer));
+    res.send(audioBuffer);
 
   } catch (err) {
     console.error('Speak error:', err.message);
     res.status(500).json({ error: 'Could not generate speech' });
   }
+});
+
+// ==========================================
+// CACHE STATS (optional — for debugging)
+// ==========================================
+router.get('/speak/cache-stats', (req, res) => {
+  const keys = Array.from(audioCache.keys()).slice(0, 20).map(k => k.substring(0, 80));
+  res.json({
+    size: audioCache.size,
+    maxSize: MAX_CACHE_SIZE,
+    sampleKeys: keys,
+  });
 });
 
 // ==========================================
@@ -467,7 +525,7 @@ router.get('/history', async (req, res) => {
 // HEALTH CHECK
 // ==========================================
 router.get('/health', (req, res) => {
-  res.json({ status: 'Neo route is awake' });
+  res.json({ status: 'Neo route is awake', cacheSize: audioCache.size });
 });
 
 module.exports = router;
