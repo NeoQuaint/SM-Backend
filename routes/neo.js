@@ -46,6 +46,33 @@ const performanceDescriptions = {
 };
 
 // ==========================================
+// DEEPINFRA REQUEST QUEUE
+// Serializes all /speak calls so DeepInfra never sees a burst.
+// ==========================================
+let deepinfraQueue = Promise.resolve();
+
+const enqueueDeepInfra = (taskFn) => {
+  const result = deepinfraQueue.then(taskFn, taskFn);
+  // Swallow errors on the chain so one failure doesn't poison the queue
+  deepinfraQueue = result.catch(() => {});
+  return result;
+};
+
+// Simple retry with backoff for 429s from DeepInfra
+const fetchWithRetry = async (url, options, maxRetries = 3) => {
+  let lastResponse = null;
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    const response = await fetch(url, options);
+    if (response.status !== 429) return response;
+    lastResponse = response;
+    const waitMs = 500 * Math.pow(2, attempt); // 500, 1000, 2000
+    console.log(`⏳ DeepInfra 429 — waiting ${waitMs}ms then retrying (attempt ${attempt + 1}/${maxRetries})`);
+    await new Promise((r) => setTimeout(r, waitMs));
+  }
+  return lastResponse;
+};
+
+// ==========================================
 // ASK NEO (Text) - Short with Formulas
 // ==========================================
 router.post('/ask', async (req, res) => {
@@ -131,7 +158,7 @@ Think: the hill goes up 3 for every 2 steps. Try again!"`;
 });
 
 // ==========================================
-// NEO SPEAK — Kokoro via DeepInfra (with cache)
+// NEO SPEAK — Kokoro via DeepInfra (with cache + queue + retry)
 // ==========================================
 router.post('/speak', async (req, res) => {
   try {
@@ -173,34 +200,38 @@ router.post('/speak', async (req, res) => {
       return res.send(cachedBuffer);
     }
 
-    console.log('🐢 Cache MISS — calling DeepInfra:', cleanText.substring(0, 60));
+    console.log('🐢 Cache MISS — queued for DeepInfra:', cleanText.substring(0, 60));
 
-    const response = await fetch(
-      `https://api.deepinfra.com/v1/text-to-speech/${KOKORO_VOICE_ID}`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${DEEPINFRA_API_KEY}`,
-        },
-        body: JSON.stringify({
-          text: cleanText,
-          model_id: 'hexgrad/Kokoro-82M',
-          output_format: 'mp3',
-        }),
+    // Serialize through the queue — DeepInfra sees one request at a time
+    const audioBuffer = await enqueueDeepInfra(async () => {
+      const response = await fetchWithRetry(
+        `https://api.deepinfra.com/v1/text-to-speech/${KOKORO_VOICE_ID}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${DEEPINFRA_API_KEY}`,
+          },
+          body: JSON.stringify({
+            text: cleanText,
+            model_id: 'hexgrad/Kokoro-82M',
+            output_format: 'mp3',
+          }),
+        }
+      );
+
+      if (!response || !response.ok) {
+        const errorText = response ? await response.text() : 'no response';
+        const status = response ? response.status : 500;
+        console.error('DeepInfra Kokoro error:', status, errorText);
+        throw Object.assign(new Error('Kokoro TTS failed'), {
+          status,
+          details: errorText,
+        });
       }
-    );
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('DeepInfra Kokoro error:', response.status, errorText);
-      return res.status(response.status).json({ 
-        error: 'Kokoro TTS failed', 
-        details: errorText 
-      });
-    }
-
-    const audioBuffer = Buffer.from(await response.arrayBuffer());
+      return Buffer.from(await response.arrayBuffer());
+    });
 
     // Store in cache
     setCached(cacheKey, audioBuffer);
@@ -216,7 +247,11 @@ router.post('/speak', async (req, res) => {
 
   } catch (err) {
     console.error('Speak error:', err.message);
-    res.status(500).json({ error: 'Could not generate speech' });
+    const status = err.status || 500;
+    res.status(status).json({
+      error: 'Could not generate speech',
+      details: err.details || err.message,
+    });
   }
 });
 
