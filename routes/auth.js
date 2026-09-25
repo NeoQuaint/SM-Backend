@@ -116,7 +116,7 @@ router.post('/login', async (req, res) => {
   }
 });
 
-// POST /api/auth/google - Google OAuth login/register
+// POST /api/auth/google
 router.post('/google', async (req, res) => {
   const { credential } = req.body;
 
@@ -252,7 +252,7 @@ router.post('/complete-onboarding', authMiddleware, async (req, res) => {
   }
 });
 
-// PUT /api/auth/update-subjects
+// PUT /api/auth/update-subjects  (ENFORCES PLAN CAP)
 router.put('/update-subjects', authMiddleware, async (req, res) => {
   const { subjects } = req.body;
 
@@ -261,12 +261,40 @@ router.put('/update-subjects', authMiddleware, async (req, res) => {
   }
 
   try {
+    const subResult = await pool.query(
+      `SELECT package, status, end_date FROM smartclass_subscriptions WHERE user_id = $1`,
+      [String(req.user.id)]
+    );
+
+    let cap = 2;
+    if (subResult.rows.length > 0) {
+      const sub = subResult.rows[0];
+      const now = new Date();
+      const end = sub.end_date ? new Date(sub.end_date) : null;
+      const active = sub.status === 'active' || (sub.status === 'cancelled' && end && end > now);
+      if (active && sub.package === 'Standard') cap = 4;
+    }
+
+    if (subjects.length > cap) {
+      return res.status(403).json({
+        status: 'error',
+        error: `Your plan allows up to ${cap} subjects. Upgrade to add more.`,
+      });
+    }
+
     const result = await pool.query(
       `UPDATE users 
        SET subjects = $1, updated_at = NOW()
        WHERE id = $2
        RETURNING id, email, subjects`,
       [subjects, req.user.id]
+    );
+
+    await pool.query(
+      `UPDATE smartclass_subscriptions 
+       SET subjects = $1, updated_at = NOW() 
+       WHERE user_id = $2`,
+      [JSON.stringify(subjects), String(req.user.id)]
     );
 
     console.log(`✅ Subjects updated for user ${req.user.id}:`, subjects);

@@ -86,11 +86,10 @@ const corsOptions = {
     'http://localhost:3000',
     'http://localhost:3001',
     'http://localhost:5000',
-    'http://localhost:5173',   // Vite default
+    'http://localhost:5173',
     'https://www.smartclasss.com',
     'https://smartclasss.com',
     'https://smartclass-wlgb.onrender.com',
-    // Vercel admin - add your domain here after deploy
     /\.vercel\.app$/
   ],
   credentials: true,
@@ -104,6 +103,10 @@ app.use(cors(corsOptions));
 // COMPRESSION & BODY PARSING
 // ====================
 app.use(compression());
+
+// ⚠️ WEBHOOK RAW BODY — MUST come BEFORE express.json()
+app.use('/api/yoco/webhook', express.raw({ type: 'application/json' }));
+
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
@@ -197,7 +200,6 @@ async function initializeDatabase() {
   try {
     console.log('📦 Initializing SmartClass database...');
     
-    // Subscriptions table
     await client.query(`
       CREATE TABLE IF NOT EXISTS smartclass_subscriptions (
         id SERIAL PRIMARY KEY,
@@ -206,6 +208,8 @@ async function initializeDatabase() {
         amount DECIMAL(10,2),
         status VARCHAR(20) DEFAULT 'active',
         payment_reference VARCHAR(255),
+        subjects JSONB DEFAULT '[]'::jsonb,
+        end_date TIMESTAMP,
         created_at TIMESTAMP DEFAULT NOW(),
         updated_at TIMESTAMP DEFAULT NOW(),
         UNIQUE(user_id)
@@ -213,7 +217,6 @@ async function initializeDatabase() {
     `);
     console.log('✅ Subscriptions table ready');
     
-    // Payment tracking table
     await client.query(`
       CREATE TABLE IF NOT EXISTS smartclass_subscription_payments (
         id SERIAL PRIMARY KEY,
@@ -229,7 +232,6 @@ async function initializeDatabase() {
     `);
     console.log('✅ Payment tracking table ready');
     
-    // Support tickets table
     await client.query(`
       CREATE TABLE IF NOT EXISTS support_tickets (
         id SERIAL PRIMARY KEY,
@@ -245,7 +247,6 @@ async function initializeDatabase() {
     `);
     console.log('✅ Support tickets table ready');
     
-    // Notification settings table
     await client.query(`
       CREATE TABLE IF NOT EXISTS user_notifications (
         id SERIAL PRIMARY KEY,
@@ -257,7 +258,6 @@ async function initializeDatabase() {
     `);
     console.log('✅ Notification settings table ready');
     
-    // Admins table (NEW)
     await client.query(`
       CREATE TABLE IF NOT EXISTS admins (
         id SERIAL PRIMARY KEY,
