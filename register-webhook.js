@@ -19,6 +19,7 @@ const WEBHOOK_URL = 'https://smartclass-wlgb.onrender.com/api/yoco/webhook';
       Authorization: `Bearer ${YOCO_SECRET}`,
     },
     body: JSON.stringify({
+      name: 'SmartClass production webhook',
       url: WEBHOOK_URL,
       events: ['payment.succeeded', 'payment.failed'],
     }),
@@ -31,9 +32,15 @@ const WEBHOOK_URL = 'https://smartclass-wlgb.onrender.com/api/yoco/webhook';
   if (data.secret) {
     console.log('\n===================================================');
     console.log('COPY THIS INTO RENDER AS YOCO_WEBHOOK_SECRET:');
+    console.log('');
     console.log(data.secret);
+    console.log('');
     console.log('===================================================\n');
+  } else if (res.status === 400) {
+    console.error('❌ 400 — bad request. Full response above.');
   } else if (res.status === 401) {
-    console.error('❌ 401 — key invalid or wrong API surface');
+    console.error('❌ 401 — key invalid.');
+  } else if (res.status === 409) {
+    console.error('❌ 409 — a webhook for this URL already exists. Check the portal.');
   }
 })();
