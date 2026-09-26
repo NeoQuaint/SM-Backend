@@ -59,7 +59,7 @@ const yocoFetch = async (url, options, retries = MAX_RETRIES) => {
 };
 
 // ====================
-// CREATE SUBSCRIPTION CHECKOUT  (auth required)
+// CREATE SUBSCRIPTION CHECKOUT
 // ====================
 router.post('/create-subscription-checkout', authMiddleware, async (req, res) => {
   try {
@@ -135,7 +135,7 @@ router.post('/create-subscription-checkout', authMiddleware, async (req, res) =>
 });
 
 // ====================
-// CREATE SWAP CHECKOUT  (auth required)
+// CREATE SWAP CHECKOUT
 // ====================
 router.post('/create-swap-checkout', authMiddleware, async (req, res) => {
   try {
@@ -203,7 +203,7 @@ router.post('/create-swap-checkout', authMiddleware, async (req, res) => {
 });
 
 // ====================
-// CHECK SUBSCRIPTION  (auth required)
+// CHECK SUBSCRIPTION
 // ====================
 router.get('/check-subscription', authMiddleware, async (req, res) => {
   try {
@@ -256,7 +256,7 @@ router.get('/check-subscription', authMiddleware, async (req, res) => {
 });
 
 // ====================
-// CANCEL SUBSCRIPTION  (auth required)
+// CANCEL SUBSCRIPTION
 // ====================
 router.post('/cancel-subscription', authMiddleware, async (req, res) => {
   try {
@@ -295,7 +295,7 @@ router.post('/cancel-subscription', authMiddleware, async (req, res) => {
 });
 
 // ====================
-// DOWNGRADE TO BASIC  (auth required)
+// DOWNGRADE TO BASIC
 // ====================
 router.post('/downgrade-basic', authMiddleware, async (req, res) => {
   try {
@@ -320,8 +320,8 @@ router.post('/downgrade-basic', authMiddleware, async (req, res) => {
 });
 
 // ====================
-// YOCO WEBHOOK  (raw body, Standard Webhooks signature)
-// Event types: payment.created, payment.refunded
+// YOCO WEBHOOK
+// Standard Webhooks payload: { type: "payment.created", data: {...} }
 // ====================
 router.post('/webhook', async (req, res) => {
   try {
@@ -339,7 +339,7 @@ router.post('/webhook', async (req, res) => {
       return res.status(500).json({ error: 'Webhook secret not configured' });
     }
 
-    // Replay protection: reject if timestamp older than 3 minutes
+    // Replay protection
     const now = Math.floor(Date.now() / 1000);
     const ts = parseInt(webhookTimestamp, 10);
     if (isNaN(ts) || Math.abs(now - ts) > 180) {
@@ -349,14 +349,12 @@ router.post('/webhook', async (req, res) => {
 
     const rawBody = req.body;
     if (!Buffer.isBuffer(rawBody)) {
-      console.error('❌ Webhook body is not raw — check server.js middleware order');
+      console.error('❌ Webhook body is not raw');
       return res.status(500).json({ error: 'Webhook misconfigured' });
     }
 
-    // Signed content: id.timestamp.body
     const signedContent = `${webhookId}.${webhookTimestamp}.${rawBody.toString('utf8')}`;
 
-    // Secret: strip "whsec_" prefix, base64-decode the rest
     const secretBytes = Buffer.from(
       YOCO_WEBHOOK_SECRET.split('_')[1] || YOCO_WEBHOOK_SECRET,
       'base64'
@@ -386,25 +384,44 @@ router.post('/webhook', async (req, res) => {
     }
 
     const event = JSON.parse(rawBody.toString('utf8'));
-    console.log('✅ Yoco webhook received:', event.event_type, '| id:', webhookId);
+    console.log('🔍 Webhook payload keys:', Object.keys(event));
 
-    const eventType = event.event_type;
+    // Support both `event_type` (some Yoco docs) and `type` (Standard Webhooks)
+    const eventType = event.event_type || event.type;
+    const payload = event.payload || event.data || event;
 
-    // ============ payment.refunded ============
+    console.log('✅ Yoco webhook received:', eventType, '| id:', webhookId);
+
+    const paymentId = payload.payment_id || payload.id;
+    const orderId = payload.order_id;
+    const lookupId = orderId || paymentId;
+
+    // ====== Failed ======
+    if (eventType === 'payment.failed' || eventType === 'payment.cancelled') {
+      if (lookupId) {
+        await pool.query(
+          `UPDATE smartclass_subscription_payments
+           SET status = 'failed'
+           WHERE checkout_id = $1 AND status = 'pending'`,
+          [lookupId]
+        );
+      }
+      return res.status(200).json({ received: true });
+    }
+
+    // ====== Refunded ======
     if (eventType === 'payment.refunded') {
-      const refundPaymentId = event.payment_id || event.order_id;
-      if (refundPaymentId) {
+      if (lookupId) {
         await pool.query(
           `UPDATE smartclass_subscription_payments
            SET status = 'refunded'
            WHERE checkout_id = $1`,
-          [refundPaymentId]
+          [lookupId]
         );
 
-        // Find the subscription tied to this payment and cancel it
         const payRow = await pool.query(
           `SELECT user_id FROM smartclass_subscription_payments WHERE checkout_id = $1`,
-          [refundPaymentId]
+          [lookupId]
         );
 
         if (payRow.rows.length > 0) {
@@ -421,16 +438,17 @@ router.post('/webhook', async (req, res) => {
       return res.status(200).json({ received: true });
     }
 
-    // ============ payment.created ============
-    if (eventType !== 'payment.created') {
+    // ====== Success ======
+    if (
+      eventType !== 'payment.succeeded' &&
+      eventType !== 'payment.created' &&
+      eventType !== 'payment.completed'
+    ) {
       return res.status(200).json({ received: true, skipped: eventType });
     }
 
-    const orderId = event.order_id;
-    const paymentId = event.payment_id;
-    const lookupId = orderId || paymentId;
-
     if (!lookupId) {
+      console.error('❌ Webhook: no payment/order id in payload');
       return res.status(200).json({ received: true, skipped: 'no id' });
     }
 
@@ -445,7 +463,6 @@ router.post('/webhook', async (req, res) => {
       return res.status(200).json({ received: true, skipped: 'checkout fetch failed' });
     }
 
-    // Only proceed if the payment actually completed
     if (checkout.status !== 'COMPLETED' && checkout.status !== 'completed') {
       console.log('⏭️ Checkout not completed yet:', checkout.status);
       return res.status(200).json({ received: true, skipped: 'not completed' });
@@ -467,7 +484,7 @@ router.post('/webhook', async (req, res) => {
       [lookupId]
     );
 
-    // ============ swap_fee ============
+    // ====== Swap fee ======
     if (type === 'swap_fee') {
       const { oldSubject, newSubject } = metadata;
       if (!oldSubject || !newSubject) {
@@ -488,21 +505,22 @@ router.post('/webhook', async (req, res) => {
       }
 
       const updated = current.map((s) => (s === oldSubject ? newSubject : s));
+      const updatedJson = JSON.stringify(updated);
 
       await pool.query(
-        `UPDATE users SET subjects = $1, updated_at = NOW() WHERE id = $2`,
-        [updated, userId]
+        `UPDATE users SET subjects = $1::jsonb, updated_at = NOW() WHERE id = $2`,
+        [updatedJson, userId]
       );
       await pool.query(
-        `UPDATE smartclass_subscriptions SET subjects = $1, updated_at = NOW() WHERE user_id = $2`,
-        [JSON.stringify(updated), String(userId)]
+        `UPDATE smartclass_subscriptions SET subjects = $1::jsonb, updated_at = NOW() WHERE user_id = $2`,
+        [updatedJson, String(userId)]
       );
 
       console.log('✅ Swap completed for user', userId, ':', oldSubject, '→', newSubject);
       return res.status(200).json({ received: true, swap: true });
     }
 
-    // ============ subscription ============
+    // ====== Subscription ======
     if (type === 'subscription') {
       const pkg = metadata.package || 'Basic';
       const amount = (checkout.amount / 100).toFixed(2);
@@ -534,7 +552,7 @@ router.post('/webhook', async (req, res) => {
 });
 
 // ====================
-// CHECK LATEST PAYMENT  (auth required)
+// CHECK LATEST PAYMENT
 // ====================
 router.get('/check-latest-payment', authMiddleware, async (req, res) => {
   try {

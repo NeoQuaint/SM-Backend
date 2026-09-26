@@ -27,8 +27,8 @@ router.post('/register', async (req, res) => {
     const password_hash = await bcrypt.hash(password, salt);
 
     const result = await pool.query(
-      `INSERT INTO users (email, password_hash, full_name, auth_provider) 
-       VALUES ($1, $2, $3, 'email') 
+      `INSERT INTO users (email, password_hash, full_name, auth_provider, subjects) 
+       VALUES ($1, $2, $3, 'email', '[]'::jsonb) 
        RETURNING id, email, full_name, avatar, grade, subjects, onboarding_complete, notifications_enabled`,
       [email, password_hash, full_name || '']
     );
@@ -156,8 +156,8 @@ router.post('/google', async (req, res) => {
       }
     } else {
       const result = await pool.query(
-        `INSERT INTO users (email, full_name, google_id, auth_provider) 
-         VALUES ($1, $2, $3, 'google') 
+        `INSERT INTO users (email, full_name, google_id, auth_provider, subjects) 
+         VALUES ($1, $2, $3, 'google', '[]'::jsonb) 
          RETURNING id, email, full_name, avatar, grade, subjects, onboarding_complete, notifications_enabled`,
         [email, fullName || '', googleId]
       );
@@ -218,9 +218,11 @@ router.post('/complete-onboarding', authMiddleware, async (req, res) => {
   const { subjects, grade, avatar, full_name, notifications_enabled } = req.body;
 
   try {
+    const subjectsJson = JSON.stringify(Array.isArray(subjects) ? subjects : []);
+
     const result = await pool.query(
       `UPDATE users 
-       SET subjects = $1, 
+       SET subjects = $1::jsonb, 
            grade = $2, 
            avatar = $3, 
            full_name = $4,
@@ -230,7 +232,7 @@ router.post('/complete-onboarding', authMiddleware, async (req, res) => {
        WHERE id = $6
        RETURNING id, email, full_name, avatar, grade, subjects, onboarding_complete, notifications_enabled`,
       [
-        subjects || [],
+        subjectsJson,
         grade || null,
         avatar || 'AVO',
         full_name || '',
@@ -252,27 +254,33 @@ router.post('/complete-onboarding', authMiddleware, async (req, res) => {
   }
 });
 
-// PUT /api/auth/update-subjects  (ENFORCES PLAN CAP)
+// PUT /api/auth/update-subjects
 router.put('/update-subjects', authMiddleware, async (req, res) => {
-  const { subjects } = req.body;
+  const { subjects, plan } = req.body;
 
   if (!Array.isArray(subjects)) {
     return res.status(400).json({ status: 'error', error: 'Subjects must be an array.' });
   }
 
   try {
+    // Determine cap: prefer DB subscription, fall back to URL-supplied plan
     const subResult = await pool.query(
       `SELECT package, status, end_date FROM smartclass_subscriptions WHERE user_id = $1`,
       [String(req.user.id)]
     );
 
     let cap = 2;
+
     if (subResult.rows.length > 0) {
       const sub = subResult.rows[0];
       const now = new Date();
       const end = sub.end_date ? new Date(sub.end_date) : null;
       const active = sub.status === 'active' || (sub.status === 'cancelled' && end && end > now);
       if (active && sub.package === 'Standard') cap = 4;
+    } else if (plan === 'standard') {
+      // Webhook hasn't landed yet — trust the frontend's plan=standard
+      cap = 4;
+      console.log(`⏳ update-subjects: trusting plan=standard for user ${req.user.id} (webhook pending)`);
     }
 
     if (subjects.length > cap) {
@@ -282,19 +290,23 @@ router.put('/update-subjects', authMiddleware, async (req, res) => {
       });
     }
 
+    // users.subjects is jsonb — stringify it
+    const subjectsJson = JSON.stringify(subjects);
+
     const result = await pool.query(
       `UPDATE users 
-       SET subjects = $1, updated_at = NOW()
+       SET subjects = $1::jsonb, updated_at = NOW()
        WHERE id = $2
        RETURNING id, email, subjects`,
-      [subjects, req.user.id]
+      [subjectsJson, req.user.id]
     );
 
+    // Keep subscription record in sync — also jsonb
     await pool.query(
       `UPDATE smartclass_subscriptions 
-       SET subjects = $1, updated_at = NOW() 
+       SET subjects = $1::jsonb, updated_at = NOW() 
        WHERE user_id = $2`,
-      [JSON.stringify(subjects), String(req.user.id)]
+      [subjectsJson, String(req.user.id)]
     );
 
     console.log(`✅ Subjects updated for user ${req.user.id}:`, subjects);
