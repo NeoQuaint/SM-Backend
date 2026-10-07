@@ -10,8 +10,8 @@ const openai = new OpenAI({
 
 // Kokoro TTS via DeepInfra
 const DEEPINFRA_API_KEY = process.env.DEEPINFRA_API_KEY;
-// Bella is Neo's shared voice; the learner's chosen buddy changes her appearance.
-const KOKORO_VOICE_ID = 'af_bella';
+// Restore Neo’s original Heart voice.
+const KOKORO_VOICE_ID = 'af_heart';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
 // ==========================================
@@ -607,4 +607,5 @@ setTimeout(async () => {
   console.log('✅ Cache warmup complete');
 }, 3000);
 
+router.use('/tutorial', require('./tutorials'));
 module.exports = router;

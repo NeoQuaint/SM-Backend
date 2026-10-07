@@ -5,7 +5,7 @@ const vm = require('node:vm');
 const path = require('node:path');
 function setup() {
   const handlers = {}, calls = [];
-  const router = { post: (route, ...fns) => { handlers[route] = fns.at(-1); }, get: (route, ...fns) => { handlers[route] = fns.at(-1); } };
+  const router = { use() {}, post: (route, ...fns) => { handlers[route] = fns.at(-1); }, get: (route, ...fns) => { handlers[route] = fns.at(-1); } };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../routes/neo.js'), 'utf8'), {
     require: name => name === 'express' ? { Router: () => router } : name === 'openai' ? class {} : {},
     process: { env: { DEEPINFRA_API_KEY: 'test-only', KOKORO_VOICE_ID: 'af_heart' } },
@@ -16,12 +16,12 @@ function setup() {
   const response = () => ({ code: 200, status(code) { this.code = code; return this; }, json(value) { this.body = value; return this; }, set(headers) { this.headers = headers; return this; }, send(value) { this.body = value; return this; } });
   return { handlers, calls, response };
 }
-test('Neo uses Bella and keeps narration longer than the former 500-character limit', async () => {
+test('Neo uses Heart and keeps narration longer than the former 500-character limit', async () => {
   const { handlers, calls, response } = setup(); const res = response();
   const text = 'A complete explanation. '.repeat(30);
   await handlers['/speak']({ body: { text } }, res);
   assert.equal(res.code, 200); assert.equal(calls.length, 1);
-  assert.ok(calls[0].url.endsWith('/af_bella'));
+  assert.ok(calls[0].url.endsWith('/af_heart'));
   assert.equal(calls[0].body.text, text);
   assert.equal(res.headers['Content-Type'], 'audio/mpeg');
 });
