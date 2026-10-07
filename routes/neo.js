@@ -10,7 +10,8 @@ const openai = new OpenAI({
 
 // Kokoro TTS via DeepInfra
 const DEEPINFRA_API_KEY = process.env.DEEPINFRA_API_KEY;
-const KOKORO_VOICE_ID = process.env.KOKORO_VOICE_ID || 'af_heart';
+// Bella is Neo's shared voice; the learner's chosen buddy changes her appearance.
+const KOKORO_VOICE_ID = 'af_bella';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
 // ==========================================
@@ -164,14 +165,14 @@ router.post('/speak', async (req, res) => {
   try {
     const { text } = req.body;
 
-    if (!text || !text.trim()) {
+    if (typeof text !== 'string' || !text.trim()) {
       return res.status(400).json({ error: 'Text is required' });
     }
 
-    // Keep truncation — Kokoro is cheap but no reason to send huge blobs
+    // Keep each scene bounded without silently cutting off its explanation.
     let cleanText = text.replace(/[^a-zA-Z0-9\s.,!?()=+\-']/g, '');
-    if (cleanText.length > 500) {
-      cleanText = cleanText.substring(0, 500);
+    if (cleanText.length > 1500) {
+      return res.status(400).json({ error: 'Split narration into scenes of at most 1500 characters.' });
     }
 
     if (!cleanText.trim()) {
@@ -560,7 +561,7 @@ router.get('/history', async (req, res) => {
 // HEALTH CHECK
 // ==========================================
 router.get('/health', (req, res) => {
-  res.json({ status: 'Neo route is awake', cacheSize: audioCache.size });
+  res.json({ status: 'Neo route is awake', cacheSize: audioCache.size, voice: KOKORO_VOICE_ID });
 });
 
 // ==========================================
