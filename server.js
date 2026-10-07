@@ -16,6 +16,7 @@ console.log('🚀 SMARTCLASS SERVER STARTING');
 // DATABASE
 // ====================
 const pool = require('./db');
+const { startPaymentEmails } = require('./services/payment-emails');
 
 // ====================
 // SECURITY MIDDLEWARE
@@ -301,6 +302,7 @@ process.on('SIGINT', () => {
 (async () => {
   try {
     await initializeDatabase();
+    startPaymentEmails(pool);
     
     app.listen(PORT, () => {
       console.log(`\n🚀 SMARTCLASS API RUNNING ON PORT ${PORT}`);
