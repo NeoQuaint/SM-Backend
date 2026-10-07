@@ -1,3 +1,4 @@
+const {changePlan,validateSwap,paymentStatus}=require('../services/profile-actions');
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
@@ -149,6 +150,7 @@ router.post('/create-swap-checkout', authMiddleware, async (req, res) => {
       return res.status(400).json({ success: false, error: 'Invalid subjects' });
     }
 
+    await validateSwap(pool,userId,oldSubject,newSubject);
     const amountInCents = SWAP_FEE * 100;
 
     const requestBody = {
@@ -200,7 +202,7 @@ router.post('/create-swap-checkout', authMiddleware, async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Create swap checkout error:', error);
-    res.status(500).json({ success: false, error: error.message });
+    res.status(error.status || 500).json({ success: false, error: error.message });
   }
 });
 
@@ -260,71 +262,16 @@ router.get('/check-subscription', authMiddleware, async (req, res) => {
 // ====================
 // CANCEL SUBSCRIPTION
 // ====================
-router.post('/cancel-subscription', authMiddleware, async (req, res) => {
-  try {
-    const userId = String(req.user.id);
-
-    const subResult = await pool.query(
-      `SELECT * FROM smartclass_subscriptions
-       WHERE user_id = $1 AND status = 'active'`,
-      [userId]
-    );
-
-    if (subResult.rows.length === 0) {
-      return res.status(404).json({ success: false, error: 'No active subscription' });
-    }
-
-    const sub = subResult.rows[0];
-    const startDate = sub.created_at ? new Date(sub.created_at) : new Date();
-    const endDate = new Date(startDate.getTime() + 30 * 24 * 60 * 60 * 1000);
-
-    await pool.query(
-      `UPDATE smartclass_subscriptions
-       SET status = 'cancelled', end_date = $1, updated_at = NOW()
-       WHERE user_id = $2 AND status = 'active'`,
-      [endDate, userId]
-    );
-
-    res.json({
-      success: true,
-      message: 'Subscription cancelled',
-      endDate: endDate.toISOString(),
-    });
-  } catch (error) {
-    console.error('❌ Cancel error:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
+router.post('/cancel-subscription', authMiddleware, async (req,res)=>{
+ try{res.json(await changePlan(pool,req.user.id,'cancel'));}catch(err){res.status(err.status||500).json({success:false,error:err.status?err.message:'Cancellation could not be saved. Please retry.'});}
+});
+router.post('/downgrade-basic', authMiddleware, async (req,res)=>{
+ try{res.json(await changePlan(pool,req.user.id,'downgrade'));}catch(err){res.status(err.status||500).json({success:false,error:err.status?err.message:'Plan change could not be saved. Please retry.'});}
+});
+router.get('/payment-status/:checkoutId', authMiddleware, async (req,res)=>{
+ try{res.json(await paymentStatus(pool,req.user.id,req.params.checkoutId));}catch(err){res.status(err.status||500).json({success:false,error:err.status?err.message:'Payment could not be checked. Please retry.'});}
 });
 
-// ====================
-// DOWNGRADE TO BASIC
-// ====================
-router.post('/downgrade-basic', authMiddleware, async (req, res) => {
-  try {
-    const userId = String(req.user.id);
-
-    await pool.query(
-      `UPDATE smartclass_subscriptions
-       SET package = 'Basic', amount = 39, updated_at = NOW()
-       WHERE user_id = $1 AND status = 'active'`,
-      [userId]
-    );
-
-    res.json({
-      success: true,
-      message: 'Downgraded to Basic',
-      subscription: { package: 'Basic', amount: 39, subjectsAllowed: 2 },
-    });
-  } catch (error) {
-    console.error('❌ Downgrade error:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// ====================
-// YOCO WEBHOOK
-// Standard Webhooks payload: { type: "payment.created", data: {...} }
-// ====================
 router.post('/webhook', async (req, res) => {
   try {
     const webhookId = req.headers['webhook-id'];
@@ -427,5 +374,5 @@ router.get('/check-latest-payment', authMiddleware, async (req, res) => {
   }
 });
 
-router.get('/health', (req, res) => res.json({ status: 'ok', paymentHandler: 'verified-checkout-v2', paymentEmails: 'queued-v1', paymentEmailsConfigured: Boolean(process.env.SUPPORT_EMAIL_PASSWORD) }));
+router.get('/health', (req, res) => res.json({ status: 'ok', paymentHandler: 'verified-checkout-v2', profileActions: 'verified-v1', paymentEmails: 'queued-v1', paymentEmailsConfigured: Boolean(process.env.SUPPORT_EMAIL_PASSWORD) }));
 module.exports = router;

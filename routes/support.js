@@ -1,3 +1,5 @@
+const authMiddleware = require('../middleware/auth');
+const escapeHtml=value=>String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
@@ -15,11 +17,16 @@ const transporter = nodemailer.createTransport({
 // ====================
 // SEND SUPPORT EMAIL
 // ====================
-router.post('/email', async (req, res) => {
-  const client = await pool.connect();
-  
+router.post('/email', authMiddleware, async (req, res) => {
+  let client;
   try {
-    const { to, subject, message, from, userName } = req.body;
+    client = await pool.connect();
+    const {subject:rawSubject,message:rawMessage}=req.body;
+    if(typeof rawSubject!=='string'||typeof rawMessage!=='string'||!rawSubject.trim()||!rawMessage.trim()||rawSubject.length>200||rawMessage.length>10000)return res.status(400).json({success:false,error:'Enter a subject (up to 200 characters) and message (up to 10,000 characters).'});
+    const account=await client.query('SELECT email, full_name FROM users WHERE id = $1',[req.user.id]);
+    if(!account.rows[0])return res.status(404).json({success:false,error:'Account not found.'});
+    const from=account.rows[0].email, userName=escapeHtml(account.rows[0].full_name||'Learner');
+    const subject=escapeHtml(rawSubject.trim()), message=escapeHtml(rawMessage.trim());
 
     if (!subject || !message) {
       return res.status(400).json({ 
@@ -34,7 +41,7 @@ router.post('/email', async (req, res) => {
        VALUES ($1, $2, $3, $4, $5)
        RETURNING id`,
       [
-        req.body.userId || 'guest',
+        String(req.user.id),
         userName || 'Unknown User',
         from || 'No email provided',
         subject,
@@ -48,7 +55,7 @@ router.post('/email', async (req, res) => {
     // Send email to support team
     const supportMailOptions = {
       from: process.env.SUPPORT_EMAIL || 'smartclass.za@gmail.com',
-      to: to || 'smartclass.za@gmail.com',
+      to: process.env.SUPPORT_EMAIL || 'smartclass.za@gmail.com',
       subject: `📚 SmartClass Support #${ticketId}: ${subject}`,
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
@@ -118,7 +125,7 @@ router.post('/email', async (req, res) => {
       error: 'Failed to send email. Please try again.' 
     });
   } finally {
-    client.release();
+    client?.release();
   }
 });
 

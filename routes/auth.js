@@ -1,3 +1,4 @@
+const {saveSubjects}=require('../services/profile-actions');
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
@@ -255,76 +256,14 @@ router.post('/complete-onboarding', authMiddleware, async (req, res) => {
 });
 
 // PUT /api/auth/update-subjects
-router.put('/update-subjects', authMiddleware, async (req, res) => {
-  const { subjects, plan } = req.body;
-
-  if (!Array.isArray(subjects)) {
-    return res.status(400).json({ status: 'error', error: 'Subjects must be an array.' });
-  }
-
-  try {
-    // Determine cap: prefer DB subscription, fall back to URL-supplied plan
-    const subResult = await pool.query(
-      `SELECT package, status, end_date FROM smartclass_subscriptions WHERE user_id = $1`,
-      [String(req.user.id)]
-    );
-
-    let cap = 2;
-
-    if (subResult.rows.length > 0) {
-      const sub = subResult.rows[0];
-      const now = new Date();
-      const end = sub.end_date ? new Date(sub.end_date) : null;
-      const active = sub.status === 'active' || (sub.status === 'cancelled' && end && end > now);
-      if (active && sub.package === 'Standard') cap = 4;
-    } else if (plan === 'standard') {
-      // Webhook hasn't landed yet — trust the frontend's plan=standard
-      cap = 4;
-      console.log(`⏳ update-subjects: trusting plan=standard for user ${req.user.id} (webhook pending)`);
-    }
-
-    if (subjects.length > cap) {
-      return res.status(403).json({
-        status: 'error',
-        error: `Your plan allows up to ${cap} subjects. Upgrade to add more.`,
-      });
-    }
-
-    // users.subjects is jsonb — stringify it
-    const subjectsJson = JSON.stringify(subjects);
-
-    const result = await pool.query(
-      `UPDATE users 
-       SET subjects = $1::jsonb, updated_at = NOW()
-       WHERE id = $2
-       RETURNING id, email, subjects`,
-      [subjectsJson, req.user.id]
-    );
-
-    // Keep subscription record in sync — also jsonb
-    await pool.query(
-      `UPDATE smartclass_subscriptions 
-       SET subjects = $1::jsonb, updated_at = NOW() 
-       WHERE user_id = $2`,
-      [subjectsJson, String(req.user.id)]
-    );
-
-    console.log(`✅ Subjects updated for user ${req.user.id}:`, subjects);
-
-    res.json({ 
-      status: 'success', 
-      user: result.rows[0] 
-    });
-
-  } catch (error) {
-    console.error('Update subjects error:', error);
-    res.status(500).json({ status: 'error', error: 'Failed to update subjects.' });
-  }
+router.put('/update-subjects', authMiddleware, async(req,res)=>{
+ try{res.json(await saveSubjects(pool,req.user.id,req.body.subjects));}catch(err){res.status(err.status||500).json({status:'error',error:err.status?err.message:'Subjects could not be saved. Please retry.'});}
 });
 
 // PUT /api/auth/update-notifications
 router.put('/update-notifications', authMiddleware, async (req, res) => {
   const { enabled } = req.body;
+  if(typeof enabled !== 'boolean')return res.status(400).json({status:'error',error:'Choose on or off.'});
 
   try {
     const result = await pool.query(
