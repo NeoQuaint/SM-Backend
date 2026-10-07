@@ -3,6 +3,7 @@ const router = express.Router();
 const pool = require('../db');
 const authMiddleware = require('../middleware/auth');
 const crypto = require('crypto');
+const { settleYocoEvent } = require('../services/yoco-settlement');
 
 const YOCO_API = 'https://payments.yoco.com/api/checkouts';
 const YOCO_SECRET_KEY = process.env.YOCO_SECRET_KEY_SMARTCLASS;
@@ -19,6 +20,7 @@ const PACKAGES = {
 const SWAP_FEE = 19;
 
 const yocoFetch = async (url, options, retries = MAX_RETRIES) => {
+  const idempotencyKey = options.headers?.['Idempotency-Key'] || crypto.randomUUID();
   for (let attempt = 1; attempt <= retries; attempt++) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), YOCO_TIMEOUT);
@@ -28,7 +30,7 @@ const yocoFetch = async (url, options, retries = MAX_RETRIES) => {
       signal: controller.signal,
       headers: {
         ...options.headers,
-        'Idempotency-Key': `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
+        'Idempotency-Key': idempotencyKey,
       },
     };
 
@@ -386,165 +388,9 @@ router.post('/webhook', async (req, res) => {
     const event = JSON.parse(rawBody.toString('utf8'));
     console.log('🔍 Webhook payload keys:', Object.keys(event));
 
-    // Support both `event_type` (some Yoco docs) and `type` (Standard Webhooks)
-    const eventType = event.event_type || event.type;
-    const payload = event.payload || event.data || event;
-
-    console.log('✅ Yoco webhook received:', eventType, '| id:', webhookId);
-
-    const paymentId = payload.payment_id || payload.id;
-    const orderId = payload.order_id;
-    const lookupId = orderId || paymentId;
-
-    // ====== Failed ======
-    if (eventType === 'payment.failed' || eventType === 'payment.cancelled') {
-      if (lookupId) {
-        await pool.query(
-          `UPDATE smartclass_subscription_payments
-           SET status = 'failed'
-           WHERE checkout_id = $1 AND status = 'pending'`,
-          [lookupId]
-        );
-      }
-      return res.status(200).json({ received: true });
-    }
-
-    // ====== Refunded ======
-    if (eventType === 'payment.refunded') {
-      if (lookupId) {
-        await pool.query(
-          `UPDATE smartclass_subscription_payments
-           SET status = 'refunded'
-           WHERE checkout_id = $1`,
-          [lookupId]
-        );
-
-        const payRow = await pool.query(
-          `SELECT user_id FROM smartclass_subscription_payments WHERE checkout_id = $1`,
-          [lookupId]
-        );
-
-        if (payRow.rows.length > 0) {
-          const userId = payRow.rows[0].user_id;
-          await pool.query(
-            `UPDATE smartclass_subscriptions
-             SET status = 'cancelled', end_date = NOW(), updated_at = NOW()
-             WHERE user_id = $1`,
-            [userId]
-          );
-          console.log('✅ Subscription cancelled due to refund for user', userId);
-        }
-      }
-      return res.status(200).json({ received: true });
-    }
-
-    // ====== Success ======
-    if (
-      eventType !== 'payment.succeeded' &&
-      eventType !== 'payment.created' &&
-      eventType !== 'payment.completed'
-    ) {
-      return res.status(200).json({ received: true, skipped: eventType });
-    }
-
-    if (!lookupId) {
-      console.error('❌ Webhook: no payment/order id in payload');
-      return res.status(200).json({ received: true, skipped: 'no id' });
-    }
-
-    // Fetch the full checkout to read metadata
-    const { response, data: checkout } = await yocoFetch(
-      `${YOCO_API}/${lookupId}`,
-      { headers: { Authorization: `Bearer ${YOCO_SECRET_KEY}` } }
-    );
-
-    if (!response.ok) {
-      console.error('❌ Could not fetch checkout for webhook:', lookupId);
-      return res.status(200).json({ received: true, skipped: 'checkout fetch failed' });
-    }
-
-    if (checkout.status !== 'COMPLETED' && checkout.status !== 'completed') {
-      console.log('⏭️ Checkout not completed yet:', checkout.status);
-      return res.status(200).json({ received: true, skipped: 'not completed' });
-    }
-
-    const metadata = checkout.metadata || {};
-    const userId = metadata.userId;
-    const type = metadata.type;
-
-    if (!userId) {
-      console.error('❌ Webhook: no userId in checkout metadata');
-      return res.status(200).json({ received: true, skipped: 'no userId' });
-    }
-
-    await pool.query(
-      `UPDATE smartclass_subscription_payments
-       SET status = 'completed', completed_at = NOW()
-       WHERE checkout_id = $1`,
-      [lookupId]
-    );
-
-    // ====== Swap fee ======
-    if (type === 'swap_fee') {
-      const { oldSubject, newSubject } = metadata;
-      if (!oldSubject || !newSubject) {
-        return res.status(200).json({ received: true, skipped: 'swap metadata missing' });
-      }
-
-      const userResult = await pool.query(
-        `SELECT subjects FROM users WHERE id = $1`,
-        [userId]
-      );
-      if (userResult.rows.length === 0) {
-        return res.status(200).json({ received: true, skipped: 'user not found' });
-      }
-
-      const current = userResult.rows[0].subjects || [];
-      if (!current.includes(oldSubject)) {
-        return res.status(200).json({ received: true, skipped: 'old subject missing' });
-      }
-
-      const updated = current.map((s) => (s === oldSubject ? newSubject : s));
-      const updatedJson = JSON.stringify(updated);
-
-      await pool.query(
-        `UPDATE users SET subjects = $1::jsonb, updated_at = NOW() WHERE id = $2`,
-        [updatedJson, userId]
-      );
-      await pool.query(
-        `UPDATE smartclass_subscriptions SET subjects = $1::jsonb, updated_at = NOW() WHERE user_id = $2`,
-        [updatedJson, String(userId)]
-      );
-
-      console.log('✅ Swap completed for user', userId, ':', oldSubject, '→', newSubject);
-      return res.status(200).json({ received: true, swap: true });
-    }
-
-    // ====== Subscription ======
-    if (type === 'subscription') {
-      const pkg = metadata.package || 'Basic';
-      const amount = (checkout.amount / 100).toFixed(2);
-
-      await pool.query(
-        `INSERT INTO smartclass_subscriptions
-         (user_id, package, amount, status, payment_reference, end_date, created_at, updated_at)
-         VALUES ($1, $2, $3, 'active', $4, NOW() + INTERVAL '30 days', NOW(), NOW())
-         ON CONFLICT (user_id)
-         DO UPDATE SET
-           package = EXCLUDED.package,
-           amount = EXCLUDED.amount,
-           status = 'active',
-           payment_reference = EXCLUDED.payment_reference,
-           end_date = NOW() + INTERVAL '30 days',
-           updated_at = NOW()`,
-        [String(userId), pkg, amount, lookupId]
-      );
-
-      console.log('✅ Subscription activated for user', userId, '| package:', pkg);
-      return res.status(200).json({ received: true, subscription: true });
-    }
-
-    res.status(200).json({ received: true, skipped: 'unknown type' });
+    const outcome = await settleYocoEvent(pool, event, YOCO_SECRET_KEY?.startsWith('sk_test_') ? 'test' : 'live');
+    console.log('✅ Yoco event processed:', event.type || event.event_type, '| id:', webhookId, '| result:', JSON.stringify(outcome));
+    return res.status(200).json(outcome);
   } catch (error) {
     console.error('❌ Webhook error:', error);
     res.status(500).json({ error: 'Webhook processing failed' });
@@ -581,4 +427,5 @@ router.get('/check-latest-payment', authMiddleware, async (req, res) => {
   }
 });
 
+router.get('/health', (req, res) => res.json({ status: 'ok', paymentHandler: 'verified-checkout-v2' }));
 module.exports = router;
