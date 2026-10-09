@@ -22,10 +22,10 @@ router.get('/stats', requireAdmin, async (req, res) => {
     // Subscriptions
     const subStats = await pool.query(`
       SELECT 
-        COUNT(*) FILTER (WHERE status = 'active' AND package = 'Basic') AS basic_active,
-        COUNT(*) FILTER (WHERE status = 'active' AND package = 'Standard') AS standard_active,
+        COUNT(*) FILTER (WHERE status = 'active' AND end_date > NOW() AND package = 'Basic') AS basic_active,
+        COUNT(*) FILTER (WHERE status = 'active' AND end_date > NOW() AND package = 'Standard') AS standard_active,
         COUNT(*) FILTER (WHERE status = 'cancelled' AND end_date > NOW()) AS cancelled_active,
-        COUNT(*) FILTER (WHERE status = 'cancelled' AND (end_date IS NULL OR end_date <= NOW())) AS expired
+        COUNT(*) FILTER (WHERE status IN ('active', 'cancelled', 'expired') AND (end_date IS NULL OR end_date <= NOW())) AS expired
       FROM smartclass_subscriptions
     `);
 
@@ -44,7 +44,7 @@ router.get('/stats', requireAdmin, async (req, res) => {
     const mrr = await pool.query(`
       SELECT COALESCE(SUM(amount), 0) AS mrr
       FROM smartclass_subscriptions
-      WHERE status = 'active' OR (status = 'cancelled' AND end_date > NOW())
+      WHERE status IN ('active', 'cancelled') AND end_date > NOW()
     `);
 
     // Support
@@ -101,7 +101,7 @@ router.get('/stats', requireAdmin, async (req, res) => {
     });
   } catch (error) {
     console.error('Stats error:', error);
-    res.status(500).json({ success: false, error: error.message });
+    res.status(500).json({ success: false, error: 'Unable to load admin data. Please retry.' });
   }
 });
 
@@ -118,7 +118,12 @@ router.get('/users', requireAdmin, async (req, res) => {
         u.onboarding_complete, u.created_at,
         s.package, s.status AS sub_status, s.end_date
       FROM users u
-      LEFT JOIN smartclass_subscriptions s ON s.user_id = u.email
+      LEFT JOIN LATERAL (
+        SELECT sub.* FROM smartclass_subscriptions sub
+        WHERE sub.user_id::text = u.id::text OR sub.user_id::text = u.email
+        ORDER BY (sub.user_id::text = u.id::text) DESC, sub.updated_at DESC NULLS LAST, sub.id DESC
+        LIMIT 1
+      ) s ON true
     `;
     const params = [];
 
@@ -152,7 +157,7 @@ router.get('/users/:email', requireAdmin, async (req, res) => {
     const { email } = req.params;
 
     const userResult = await pool.query(
-      'SELECT * FROM users WHERE email = $1',
+      'SELECT id, email, full_name, grade, subjects, onboarding_complete, created_at FROM users WHERE email = $1',
       [email]
     );
 
@@ -162,14 +167,14 @@ router.get('/users/:email', requireAdmin, async (req, res) => {
 
     const payments = await pool.query(
       `SELECT * FROM smartclass_subscription_payments 
-       WHERE user_id = $1 ORDER BY created_at DESC`,
-      [email]
+       WHERE user_id::text = $1 OR user_id::text = $2 ORDER BY created_at DESC`,
+      [String(userResult.rows[0].id), email]
     );
 
     const subscription = await pool.query(
       `SELECT * FROM smartclass_subscriptions 
-       WHERE user_id = $1 ORDER BY updated_at DESC LIMIT 1`,
-      [email]
+       WHERE user_id::text = $1 OR user_id::text = $2 ORDER BY (user_id::text = $1) DESC, updated_at DESC NULLS LAST, id DESC LIMIT 1`,
+      [String(userResult.rows[0].id), email]
     );
 
     res.json({
@@ -193,9 +198,9 @@ router.get('/subscriptions', requireAdmin, async (req, res) => {
 
     let query = `
       SELECT 
-        s.*, u.full_name, u.grade
+        s.*, u.full_name, u.email, u.grade
       FROM smartclass_subscriptions s
-      LEFT JOIN users u ON u.email = s.user_id
+      LEFT JOIN users u ON (u.id::text = s.user_id::text OR u.email = s.user_id::text)
       WHERE 1=1
     `;
     const params = [];
@@ -255,7 +260,7 @@ router.get('/payments', requireAdmin, async (req, res) => {
     let query = `
       SELECT p.*, u.full_name, u.email
       FROM smartclass_subscription_payments p
-      LEFT JOIN users u ON u.email = p.user_id
+      LEFT JOIN users u ON (u.id::text = p.user_id::text OR u.email = p.user_id::text)
       WHERE 1=1
     `;
     const params = [];
