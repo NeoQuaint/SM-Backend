@@ -47,7 +47,7 @@ async function validateNotification(data, ip, cfg, { resolve4 = dns.resolve4.bin
   const expected = crypto.createHash('md5').update(notificationBody + (cfg.passphrase ? `&passphrase=${encodeNotification(cfg.passphrase)}` : '')).digest('hex');
   if (!/^[a-f0-9]{32}$/i.test(data.signature || '') || !crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(data.signature.toLowerCase()))) throw error('Invalid payment signature', 401);
   if (data.merchant_id !== cfg.merchantId) throw error('Wrong payment merchant', 401);
-  const hosts = cfg.mode === 'test' ? ['sandbox.payfast.co.za'] : ['www.payfast.co.za', 'ips.payfast.co.za', 'w1w.payfast.co.za', 'w2w.payfast.co.za'];
+  const hosts = cfg.mode === 'test' ? ['sandbox.payfast.co.za'] : ['www.payfast.co.za', 'api.payfast.co.za', 'ips.payfast.co.za', 'w1w.payfast.co.za', 'w2w.payfast.co.za'];
   const results = await Promise.allSettled(hosts.map(host => resolve4(host)));
   const allowed = results.flatMap(r => r.status === 'fulfilled' ? r.value : []);
   if (!allowed.length) throw error('Payment source verification unavailable', 503);

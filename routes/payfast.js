@@ -1,6 +1,7 @@
 const express = require('express');
 const crypto = require('node:crypto');
 const { checkoutPolicy } = require('../services/payfast-checkout-policy');
+const { paymentSource } = require('../services/payfast-source');
 const pool = require('../db');
 const auth = require('../middleware/auth');
 const { config, parseNotification, validateNotification } = require('../services/payfast-security');
@@ -38,15 +39,16 @@ router.get('/checkout/:id', async (req, res) => {
 router.post('/webhook', async (req, res) => {
   try {
     const cfg = config(), data = parseNotification(req.body);
-    await validateNotification(data, req.ip, cfg);
+    await validateNotification(data, paymentSource(req), cfg);
     await initialize();
-    await settlePayfast(pool, data, cfg);
+    const outcome = await settlePayfast(pool, data, cfg);
+    console.log('PayFast notification processed:', JSON.stringify(outcome));
     res.status(200).send('OK');
   } catch (error) { failure(res, error); }
 });
 router.get('/health', (req, res) => {
   let configured = false, mode = 'unconfigured';
   try { mode = config().mode; configured = true; } catch {}
-  res.json({status: 'ok', provider: 'payfast', configured, mode, handler: 'verified-itn-v1', notificationEncoding: 'all-fields-v2', checkoutPolicy: 'redirect-hosts-v2'});
+  res.json({status: 'ok', provider: 'payfast', configured, mode, handler: 'verified-itn-v1', notificationSource: 'render-edge-v2', notificationEncoding: 'all-fields-v2', checkoutPolicy: 'redirect-hosts-v2'});
 });
 module.exports = router;
