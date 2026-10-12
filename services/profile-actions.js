@@ -25,7 +25,7 @@ async function changePlan(pool,userId,kind){
  }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
 }
 async function paymentStatus(pool,userId,checkoutId){
- if(typeof checkoutId!=='string'||!/^ch_[A-Za-z0-9_-]+$/.test(checkoutId))throw failure('Invalid checkout reference.');
+ if(typeof checkoutId!=='string'||!/^(ch_|pf_)[A-Za-z0-9_-]+$/.test(checkoutId))throw failure('Invalid checkout reference.');
  const {rows}=await pool.query('SELECT checkout_id, package, status FROM smartclass_subscription_payments WHERE checkout_id = $1 AND user_id = $2',[checkoutId,String(userId)]);
  if(!rows[0])throw failure('Payment not found for this account.',404);
  return{success:true,checkoutId:rows[0].checkout_id,package:rows[0].package,status:rows[0].status};

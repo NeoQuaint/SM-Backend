@@ -1,6 +1,11 @@
 const {changePlan,validateSwap,paymentStatus}=require('../services/profile-actions');
 const express = require('express');
 const router = express.Router();
+// PayFast handles all new purchases, including clients with cached Yoco endpoint URLs.
+router.use((req,res,next)=>{
+ if(req.method==='POST' && ['/create-subscription-checkout','/create-swap-checkout'].includes(req.path)) return require('./payfast')(req,res,next);
+ next();
+});
 const pool = require('../db');
 const authMiddleware = require('../middleware/auth');
 const crypto = require('crypto');

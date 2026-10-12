@@ -1,359 +1,51 @@
 const express = require('express');
-const router = express.Router();
-const crypto = require('crypto');
+const crypto = require('node:crypto');
 const pool = require('../db');
-const authMiddleware = require('../middleware/auth');
-
-const PAYFAST_MERCHANT_ID = process.env.PAYFAST_MERCHANT_ID;
-const PAYFAST_MERCHANT_KEY = process.env.PAYFAST_MERCHANT_KEY;
-const PAYFAST_PASSPHRASE = process.env.PAYFAST_PASSPHRASE;
-const PAYFAST_TEST_MODE = process.env.PAYFAST_TEST_MODE === 'true';
-const FRONTEND_URL = process.env.FRONTEND_URL || 'https://sm-simple.vercel.app';
-const BACKEND_URL = process.env.BACKEND_URL || 'https://smartclass-wlgb.onrender.com';
-
-// ====================
-// PAYFAST SIGNATURE GENERATOR
-// ====================
-const generatePayFastSignature = (data, passphrase = null) => {
-  let pfOutput = '';
-  const sortedKeys = Object.keys(data).sort();
-  
-  for (const key of sortedKeys) {
-    if (data[key] !== '' && data[key] !== null && data[key] !== undefined) {
-      pfOutput += `${key}=${encodeURIComponent(data[key]).replace(/%20/g, '+')}&`;
-    }
-  }
-  
-  let getString = pfOutput.slice(0, -1);
-  
-  if (passphrase !== null && passphrase !== '') {
-    getString += `&passphrase=${encodeURIComponent(passphrase).replace(/%20/g, '+')}`;
-  }
-  
-  return crypto.createHash('md5').update(getString).digest('hex');
-};
-
-// ====================
-// VERIFY PAYFAST SIGNATURE
-// ====================
-const verifyPayFastSignature = (data, signature) => {
-  const generatedSignature = generatePayFastSignature(data, PAYFAST_PASSPHRASE);
-  return generatedSignature === signature;
-};
-
-// ====================
-// WEBHOOK DUPLICATE PREVENTION
-// ====================
-const processedWebhooks = new Map();
-
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, timestamp] of processedWebhooks) {
-    if (now - timestamp > 30 * 60 * 1000) {
-      processedWebhooks.delete(key);
-    }
-  }
-}, 5 * 60 * 1000);
-
-// ====================
-// CREATE SUBSCRIPTION CHECKOUT
-// ====================
-router.post('/create-subscription-checkout', authMiddleware, async (req, res) => {
+const auth = require('../middleware/auth');
+const { config, parseNotification, validateNotification } = require('../services/payfast-security');
+const { SCHEMA, createOrder, paymentFields, settlePayfast, hash } = require('../services/payfast-orders');
+const router = express.Router();
+let ready;
+function initialize() { return ready ||= pool.query(SCHEMA).catch(error => { ready = null; throw error; }); }
+const escape = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
+function failure(res, error) {
+  console.warn('PayFast request failed:', error.status ? error.message : 'service or database unavailable');
+  return res.status(error.status || 503).json({success: false, error: error.status && error.status < 500 ? error.message : 'Payments are temporarily unavailable. Please try again shortly.'});
+}
+for (const [route, swap] of [['create-subscription-checkout', false], ['create-swap-checkout', true]]) {
+  router.post('/' + route, auth, async (req, res) => {
+    try { const cfg = config(); await initialize(); res.json(await createOrder(pool, req.user.id, req.body, swap, cfg)); }
+    catch (error) { failure(res, error); }
+  });
+}
+router.get('/checkout/:id', async (req, res) => {
+  res.set({'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Robots-Tag': 'noindex, nofollow'});
   try {
-    const userId = req.user.userId || req.user.id;
-    const { amount, package: pkg, email } = req.body;
-    
-    if (!amount || amount <= 0) {
-      return res.status(400).json({ success: false, error: 'Invalid amount' });
-    }
-    
-    let customerEmail = email;
-    
-    if (!customerEmail) {
-      const userResult = await pool.query('SELECT email FROM users WHERE id = $1', [userId]);
-      if (userResult.rows.length > 0) {
-        customerEmail = userResult.rows[0].email;
-      }
-    }
-    
-    const paymentId = `SM-SUB-${Date.now()}-${userId}`;
-    
-    const paymentData = {
-      merchant_id: PAYFAST_MERCHANT_ID,
-      merchant_key: PAYFAST_MERCHANT_KEY,
-      return_url: `${FRONTEND_URL}/payment/success`,
-      cancel_url: `${FRONTEND_URL}/payment/cancel`,
-      notify_url: `${BACKEND_URL}/api/payfast/webhook`,
-      m_payment_id: paymentId,
-      amount: amount.toFixed(2),
-      item_name: `${pkg} Subscription - SmartClass`,
-      item_description: `Monthly subscription for ${pkg} package`,
-      email_address: customerEmail,
-      custom_str1: userId.toString(),
-      custom_str2: pkg,
-      custom_str3: 'subscription',
-      subscription_type: '1',
-      billing_date: new Date().toISOString().split('T')[0],
-      recurring_amount: amount.toFixed(2),
-      frequency: '3',
-      cycles: '0',
-    };
-    
-    paymentData.signature = generatePayFastSignature(paymentData, PAYFAST_PASSPHRASE);
-    
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS smartclass_subscription_payments (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER NOT NULL,
-        payment_id VARCHAR(255) NOT NULL,
-        package VARCHAR(50),
-        amount DECIMAL(10,2),
-        status VARCHAR(20) DEFAULT 'pending',
-        created_at TIMESTAMP DEFAULT NOW(),
-        completed_at TIMESTAMP,
-        UNIQUE(payment_id)
-      )
-    `);
-    
-    await pool.query(
-      `INSERT INTO smartclass_subscription_payments (user_id, payment_id, package, amount, status, created_at)
-       VALUES ($1, $2, $3, $4, 'pending', NOW())`,
-      [userId, paymentId, pkg, amount]
-    );
-    
-    res.json({
-      success: true,
-      paymentData,
-      payfastUrl: PAYFAST_TEST_MODE 
-        ? 'https://sandbox.payfast.co.za/eng/process'
-        : 'https://www.payfast.co.za/eng/process'
-    });
-    
-  } catch (error) {
-    console.error('❌ Create subscription checkout error:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
+    const cfg = config(); await initialize();
+    if (!/^pf_[a-f0-9]{32}$/.test(req.params.id) || !/^[a-f0-9]{64}$/.test(req.query.token || '')) return res.status(404).send('Checkout not found.');
+    const order = (await pool.query(`SELECT o.*, p.amount, p.package, p.status FROM smartclass_payfast_orders o
+      JOIN smartclass_subscription_payments p ON p.checkout_id = o.checkout_id
+      WHERE o.checkout_id = $1 AND o.token_hash = $2`, [req.params.id, hash(req.query.token)])).rows[0];
+    if (!order || order.mode !== cfg.mode) return res.status(404).send('Checkout not found.');
+    if (order.status === 'completed') return res.redirect(`${cfg.frontend}/${order.package === 'swap_fee' ? 'swap-success' : 'payment-success'}`);
+    if (order.status !== 'pending' || new Date(order.expires_at) <= new Date()) return res.status(410).send('This checkout has expired. Return to Smartclass to start again. If you already paid, check your payment status first.');
+    const fields = paymentFields(order, cfg), nonce = crypto.randomBytes(18).toString('base64');
+    res.set('Content-Security-Policy', `default-src 'none'; script-src 'nonce-${nonce}'; form-action https://${cfg.host}; base-uri 'none'; frame-ancestors 'none'`);
+    res.type('html').send(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Smartclass secure checkout</title><body><p>Opening PayFast secure checkout…</p><form method="post" action="https://${cfg.host}/eng/process">${Object.entries(fields).map(([key,value]) => `<input type="hidden" name="${key}" value="${escape(value)}">`).join('')}<button type="submit">Continue to PayFast</button></form><script nonce="${nonce}">document.forms[0].submit()</script></body></html>`);
+  } catch (error) { failure(res, error); }
 });
-
-// ====================
-// CREATE SWAP FEE CHECKOUT (R19)
-// ====================
-router.post('/create-swap-checkout', authMiddleware, async (req, res) => {
-  try {
-    const userId = req.user.userId || req.user.id;
-    const { amount, oldSubject, newSubject, email } = req.body;
-    
-    if (!amount || amount <= 0) {
-      return res.status(400).json({ success: false, error: 'Invalid amount' });
-    }
-    
-    let customerEmail = email;
-    
-    if (!customerEmail) {
-      const userResult = await pool.query('SELECT email FROM users WHERE id = $1', [userId]);
-      if (userResult.rows.length > 0) {
-        customerEmail = userResult.rows[0].email;
-      }
-    }
-    
-    const paymentId = `SM-SWAP-${Date.now()}-${userId}`;
-    
-    const paymentData = {
-      merchant_id: PAYFAST_MERCHANT_ID,
-      merchant_key: PAYFAST_MERCHANT_KEY,
-      return_url: `${FRONTEND_URL}/profile?swap=success`,
-      cancel_url: `${FRONTEND_URL}/profile?swap=cancelled`,
-      notify_url: `${BACKEND_URL}/api/payfast/webhook`,
-      m_payment_id: paymentId,
-      amount: amount.toFixed(2),
-      item_name: 'Subject Swap Fee',
-      item_description: `Swap ${oldSubject} to ${newSubject}`,
-      email_address: customerEmail,
-      custom_str1: userId.toString(),
-      custom_str2: 'swap_fee',
-      custom_str3: `${oldSubject}->${newSubject}`,
-    };
-    
-    paymentData.signature = generatePayFastSignature(paymentData, PAYFAST_PASSPHRASE);
-    
-    await pool.query(
-      `INSERT INTO smartclass_subscription_payments (user_id, payment_id, package, amount, status, created_at)
-       VALUES ($1, $2, 'swap_fee', $3, 'pending', NOW())`,
-      [userId, paymentId, amount]
-    );
-    
-    res.json({
-      success: true,
-      paymentData,
-      payfastUrl: PAYFAST_TEST_MODE 
-        ? 'https://sandbox.payfast.co.za/eng/process'
-        : 'https://www.payfast.co.za/eng/process'
-    });
-    
-  } catch (error) {
-    console.error('❌ Create swap checkout error:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// ====================
-// PAYFAST WEBHOOK (ITN)
-// ====================
 router.post('/webhook', async (req, res) => {
   try {
-    const pfData = req.body;
-    const signature = pfData.signature;
-    
-    delete pfData.signature;
-    
-    if (!verifyPayFastSignature(pfData, signature)) {
-      console.log('❌ Invalid PayFast signature');
-      return res.status(400).json({ received: false, error: 'Invalid signature' });
-    }
-    
-    const paymentId = pfData.m_payment_id;
-    const paymentStatus = pfData.payment_status;
-    const amount = pfData.amount_gross;
-    const userId = pfData.custom_str1;
-    const pkg = pfData.custom_str2;
-    const customData = pfData.custom_str3;
-    
-    console.log('📩 PayFast webhook received:', { paymentId, paymentStatus, amount, pkg });
-    
-    const dedupKey = `${paymentId}-${paymentStatus}`;
-    if (processedWebhooks.has(dedupKey)) {
-      console.log(`⏭️ Skipping duplicate webhook: ${dedupKey}`);
-      return res.status(200).json({ received: true, duplicate: true });
-    }
-    processedWebhooks.set(dedupKey, Date.now());
-    
-    if (paymentStatus === 'COMPLETE') {
-      await pool.query(
-        `UPDATE smartclass_subscription_payments SET status = 'completed', completed_at = NOW() WHERE payment_id = $1`,
-        [paymentId]
-      );
-      
-      if (pkg === 'swap_fee') {
-        const [oldSubject, newSubject] = customData.split('->');
-        
-        const userResult = await pool.query(
-          'SELECT subjects FROM smartclass_users WHERE id = $1',
-          [userId]
-        );
-        
-        if (userResult.rows.length > 0) {
-          let subjects = userResult.rows[0].subjects;
-          if (typeof subjects === 'string') {
-            subjects = JSON.parse(subjects);
-          }
-          const updatedSubjects = subjects.map(s => s === oldSubject ? newSubject : s);
-          
-          await pool.query(
-            'UPDATE smartclass_users SET subjects = $1 WHERE id = $2',
-            [JSON.stringify(updatedSubjects), userId]
-          );
-          
-          console.log(`✅ Subject swap completed: ${oldSubject} -> ${newSubject}`);
-        }
-      } else {
-        await pool.query(`
-          CREATE TABLE IF NOT EXISTS smartclass_subscriptions (
-            id SERIAL PRIMARY KEY,
-            user_id INTEGER NOT NULL,
-            package VARCHAR(50),
-            amount DECIMAL(10,2),
-            status VARCHAR(20) DEFAULT 'active',
-            payment_id VARCHAR(255),
-            created_at TIMESTAMP DEFAULT NOW(),
-            updated_at TIMESTAMP DEFAULT NOW(),
-            UNIQUE(user_id)
-          )
-        `);
-        
-        await pool.query(`
-          INSERT INTO smartclass_subscriptions (user_id, package, amount, status, payment_id, created_at, updated_at)
-          VALUES ($1, $2, $3, 'active', $4, NOW(), NOW())
-          ON CONFLICT (user_id) 
-          DO UPDATE SET 
-            package = EXCLUDED.package,
-            amount = EXCLUDED.amount,
-            status = 'active',
-            payment_id = EXCLUDED.payment_id,
-            updated_at = NOW()
-        `, [userId, pkg, amount, paymentId]);
-        
-        console.log(`✅ Subscription activated: User ${userId} - ${pkg} at R${amount}/month`);
-      }
-    }
-    
-    res.status(200).json({ received: true });
-    
-  } catch (error) {
-    console.error('❌ PayFast webhook error:', error);
-    res.status(200).json({ received: true });
-  }
+    const cfg = config(), data = parseNotification(req.body);
+    await validateNotification(data, req.ip, cfg);
+    await initialize();
+    await settlePayfast(pool, data, cfg);
+    res.status(200).send('OK');
+  } catch (error) { failure(res, error); }
 });
-
-// ====================
-// CHECK SUBSCRIPTION STATUS
-// ====================
-router.get('/check-subscription', authMiddleware, async (req, res) => {
-  try {
-    const userId = req.user.userId || req.user.id;
-    
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS smartclass_subscriptions (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER NOT NULL,
-        package VARCHAR(50),
-        amount DECIMAL(10,2),
-        status VARCHAR(20) DEFAULT 'active',
-        payment_id VARCHAR(255),
-        created_at TIMESTAMP DEFAULT NOW(),
-        updated_at TIMESTAMP DEFAULT NOW(),
-        UNIQUE(user_id)
-      )
-    `);
-    
-    const result = await pool.query(
-      `SELECT * FROM smartclass_subscriptions WHERE user_id = $1 AND status = 'active'`,
-      [userId]
-    );
-    
-    if (result.rows.length > 0) {
-      res.json({ 
-        success: true, 
-        hasSubscription: true, 
-        subscription: result.rows[0]
-      });
-    } else {
-      res.json({ success: true, hasSubscription: false });
-    }
-    
-  } catch (error) {
-    console.error('❌ Check subscription error:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
+router.get('/health', (req, res) => {
+  let configured = false, mode = 'unconfigured';
+  try { mode = config().mode; configured = true; } catch {}
+  res.json({status: 'ok', provider: 'payfast', configured, mode, handler: 'verified-itn-v1'});
 });
-
-// ====================
-// CANCEL SUBSCRIPTION
-// ====================
-router.post('/cancel-subscription', authMiddleware, async (req, res) => {
-  try {
-    const userId = req.user.userId || req.user.id;
-    
-    await pool.query(
-      `UPDATE smartclass_subscriptions SET status = 'cancelled', updated_at = NOW() WHERE user_id = $1 AND status = 'active'`,
-      [userId]
-    );
-    
-    res.json({ success: true, message: 'Subscription cancelled' });
-    
-  } catch (error) {
-    console.error('❌ Cancel subscription error:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
 module.exports = router;

@@ -108,6 +108,7 @@ app.use(compression());
 // ⚠️ WEBHOOK RAW BODY — MUST come BEFORE express.json()
 app.use('/api/yoco/webhook', express.raw({ type: 'application/json' }));
 
+app.use('/api/payfast/webhook', express.raw({ type: 'application/x-www-form-urlencoded', limit: '32kb' }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
@@ -117,6 +118,10 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use('/api/', apiLimiter);
 app.use('/api/auth/', authLimiter);
 app.use('/api/yoco/', paymentLimiter);
+app.use(['/api/payfast', '/api/payments'], (req,res,next)=>{
+ if (req.method === 'POST' && /^\/create-(subscription|swap)-checkout$/.test(req.path)) return paymentLimiter(req,res,next);
+ next();
+});
 app.use('/api/support/', supportLimiter);
 app.use('/api/admin/', adminLimiter);
 
@@ -168,6 +173,13 @@ app.use('/api/reviews', reviewsRoutes);
 app.use('/api/track-event', analyticsRoutes);
 app.use('/api/neo', neoRoutes);
 app.use('/api/yoco', yocoRoutes);
+app.use('/api/payfast', require('./routes/payfast'));
+app.use('/api/payments', require('./routes/payfast'));
+// Account status and plan actions remain compatible with existing paid accounts.
+app.use('/api/payments', (req,res,next)=>{
+ if (/^\/(check-subscription|check-latest-payment|cancel-subscription|downgrade-basic|payment-status\/[^/]+)$/.test(req.path)) return yocoRoutes(req,res,next);
+ next();
+});
 app.use('/api/support', supportRoutes);
 app.use('/api/subscription', subscriptionRoutes);
 app.use('/api/admin/auth', adminAuthRoutes);
