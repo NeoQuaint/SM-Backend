@@ -171,6 +171,7 @@ app.use('/api/sessions', sessionsRoutes);
 app.use('/api/messages', messagesRoutes);
 app.use('/api/reviews', reviewsRoutes);
 app.use('/api/track-event', analyticsRoutes);
+app.use('/api/visitors', require('./routes/visitorAnalytics')); 
 app.use('/api/neo', neoRoutes);
 app.use('/api/yoco', yocoRoutes);
 app.use('/api/payfast', require('./routes/payfast'));
