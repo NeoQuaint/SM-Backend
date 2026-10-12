@@ -1,6 +1,16 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const { encode, parameters, signature, parseNotification, cents, config, validateNotification } = require('../services/payfast-security');
 const cfg = { merchantId: '10000100', passphrase: 'test-pass', mode: 'test', host: 'sandbox.payfast.co.za' };
+test('realistic ITN keeps blank fields and exact whitespace in signature and server confirmation', async () => {
+  const canonical = 'm_payment_id=pf_123&pf_payment_id=1234&payment_status=COMPLETE&item_name=Study+plan&item_description=&custom_str1=&amount_gross=59.00&name_first=+Neo+&merchant_id=10000100';
+  const digest = require('node:crypto').createHash('md5').update(canonical + '&passphrase=test-pass').digest('hex');
+  const data = parseNotification(Buffer.from(canonical + '&signature=' + digest));
+  const deps = {resolve4:async()=>['192.0.2.1'],fetcher:async(url,options)=>{assert.equal(options.body,canonical);return {ok:true,text:async()=> 'VALID'};}};
+  await validateNotification(data,'192.0.2.1',cfg,deps);
+  await assert.rejects(validateNotification({...data,custom_str1:'changed'},'192.0.2.1',cfg,deps),/signature/);
+  const removed={...data};delete removed.item_description;
+  await assert.rejects(validateNotification(removed,'192.0.2.1',cfg,deps),/signature/);
+});
 const signed = () => { const data = { m_payment_id: 'pf_123', pf_payment_id: '1234', payment_status: 'COMPLETE', amount_gross: '59.00', merchant_id: cfg.merchantId }; data.signature = signature(data, cfg.passphrase); return data; };
 test('PHP form encoding, insertion order and signature exclusion', () => {
   assert.equal(encode(" A ~!*'() "), 'A+%7E%21%2A%27%28%29');

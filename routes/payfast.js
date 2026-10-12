@@ -47,6 +47,6 @@ router.post('/webhook', async (req, res) => {
 router.get('/health', (req, res) => {
   let configured = false, mode = 'unconfigured';
   try { mode = config().mode; configured = true; } catch {}
-  res.json({status: 'ok', provider: 'payfast', configured, mode, handler: 'verified-itn-v1', checkoutPolicy: 'redirect-hosts-v2'});
+  res.json({status: 'ok', provider: 'payfast', configured, mode, handler: 'verified-itn-v1', notificationEncoding: 'all-fields-v2', checkoutPolicy: 'redirect-hosts-v2'});
 });
 module.exports = router;
