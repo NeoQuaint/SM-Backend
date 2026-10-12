@@ -1,5 +1,6 @@
 const express = require('express');
 const crypto = require('node:crypto');
+const { checkoutPolicy } = require('../services/payfast-checkout-policy');
 const pool = require('../db');
 const auth = require('../middleware/auth');
 const { config, parseNotification, validateNotification } = require('../services/payfast-security');
@@ -30,7 +31,7 @@ router.get('/checkout/:id', async (req, res) => {
     if (order.status === 'completed') return res.redirect(`${cfg.frontend}/${order.package === 'swap_fee' ? 'swap-success' : 'payment-success'}`);
     if (order.status !== 'pending' || new Date(order.expires_at) <= new Date()) return res.status(410).send('This checkout has expired. Return to Smartclass to start again. If you already paid, check your payment status first.');
     const fields = paymentFields(order, cfg), nonce = crypto.randomBytes(18).toString('base64');
-    res.set('Content-Security-Policy', `default-src 'none'; script-src 'nonce-${nonce}'; form-action https://${cfg.host}; base-uri 'none'; frame-ancestors 'none'`);
+    res.set('Content-Security-Policy', checkoutPolicy(cfg, nonce));
     res.type('html').send(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Smartclass secure checkout</title><body><p>Opening PayFast secure checkout…</p><form method="post" action="https://${cfg.host}/eng/process">${Object.entries(fields).map(([key,value]) => `<input type="hidden" name="${key}" value="${escape(value)}">`).join('')}<button type="submit">Continue to PayFast</button></form><script nonce="${nonce}">document.forms[0].submit()</script></body></html>`);
   } catch (error) { failure(res, error); }
 });
@@ -46,6 +47,6 @@ router.post('/webhook', async (req, res) => {
 router.get('/health', (req, res) => {
   let configured = false, mode = 'unconfigured';
   try { mode = config().mode; configured = true; } catch {}
-  res.json({status: 'ok', provider: 'payfast', configured, mode, handler: 'verified-itn-v1'});
+  res.json({status: 'ok', provider: 'payfast', configured, mode, handler: 'verified-itn-v1', checkoutPolicy: 'redirect-hosts-v2'});
 });
 module.exports = router;
