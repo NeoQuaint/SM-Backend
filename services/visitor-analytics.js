@@ -35,7 +35,7 @@ function createStore(pool){
   }catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
   if(Date.now()-cleanupAt>3600000){cleanupAt=Date.now();await pool.query("DELETE FROM smartclass_visits WHERE started_at < NOW()-INTERVAL '90 days'");}
  }
- async function report(days,offset){
+ async function report(days,offset,includeRecent=true){
   await ensure();
   // Only completed subscription payments in this visit's time window count as paid.
   const cte=`WITH visits AS (SELECT v.*, EXISTS(SELECT 1 FROM smartclass_subscription_payments p WHERE p.user_id::text=v.user_id::text AND p.status='completed' AND p.package IN ('Basic','Standard') AND p.completed_at BETWEEN v.started_at AND v.last_seen+INTERVAL '30 minutes') AS paid,
@@ -43,7 +43,7 @@ function createStore(pool){
   const [summary,stages,recent,sources,daily,settings]=await Promise.all([
    pool.query(cte+`SELECT COUNT(*)::int AS sessions,COUNT(DISTINCT visitor_id)::int AS visitors,COUNT(*) FILTER(WHERE NOT ended)::int AS active,COUNT(*) FILTER(WHERE ended)::int AS ended,COUNT(*) FILTER(WHERE ended AND NOT interacted AND active_seconds<10 AND (SELECT COUNT(*) FROM jsonb_object_keys(reached))=1)::int AS bounces,COUNT(*) FILTER(WHERE form_started)::int AS forms,COUNT(*) FILTER(WHERE paid)::int AS paid,COUNT(*) FILTER(WHERE checkout_error)::int AS errors,COUNT(*) FILTER(WHERE tutorial_skipped)::int AS skipped,COALESCE(ROUND(AVG(active_seconds)),0)::int AS average_seconds FROM visits`,[days]),
    pool.query(cte+`SELECT s.stage,COUNT(*) FILTER(WHERE v.reached ? s.stage)::int AS reached,COUNT(*) FILTER(WHERE v.ended AND v.last_stage=s.stage AND NOT (v.reached ? 'dashboard'))::int AS stopped FROM visits v CROSS JOIN unnest($2::text[]) AS s(stage) GROUP BY s.stage`,[days,Object.keys(STAGES)]),
-   pool.query(cte+`SELECT v.*,u.full_name,u.email FROM visits v LEFT JOIN users u ON u.id=v.user_id ORDER BY v.started_at DESC LIMIT 50 OFFSET $2`,[days,offset]),
+   includeRecent ? pool.query(cte+`SELECT v.*,u.full_name,u.email FROM visits v LEFT JOIN users u ON u.id=v.user_id ORDER BY v.started_at DESC LIMIT 50 OFFSET $2`,[days,offset]) : Promise.resolve({rows:[]}),
    pool.query(cte+`SELECT source,COUNT(*)::int AS sessions FROM visits GROUP BY source ORDER BY sessions DESC LIMIT 10`,[days]),
    pool.query(cte+`SELECT (started_at AT TIME ZONE 'Africa/Johannesburg')::date AS day,COUNT(*)::int AS sessions,COUNT(DISTINCT visitor_id)::int AS visitors FROM visits GROUP BY day ORDER BY day`,[days]),
    pool.query('SELECT enabled_at FROM smartclass_visit_settings WHERE id=1')

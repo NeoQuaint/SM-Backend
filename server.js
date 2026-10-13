@@ -184,6 +184,7 @@ app.use('/api/payments', (req,res,next)=>{
 app.use('/api/support', supportRoutes);
 app.use('/api/subscription', subscriptionRoutes);
 app.use('/api/admin/auth', adminAuthRoutes);
+app.use('/api/admin/insights', require('./routes/adminInsights'));
 app.use('/api/admin', adminRoutes);
 
 // ====================

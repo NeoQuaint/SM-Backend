@@ -1,0 +1,10 @@
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('fs'),vm=require('vm'),{createRequire}=require('module');
+const deps=createRequire('C:/Users/NeoMa/OneDrive/Desktop/Smartclass/SM-Backend/package.json');
+function load(file,overrides){const m={exports:{}};vm.runInNewContext(fs.readFileSync(file,'utf8'),{module:m,exports:m.exports,require:n=>Object.hasOwn(overrides,n)?overrides[n]:deps(n),process,console},{filename:file});return m.exports;}
+test('admin API rejects anonymous and student tokens before collecting analytics',async()=>{
+ const express=deps('express'),jwt=deps('jsonwebtoken');let reports=0;
+ const admin=load('work/backend-bella/middleware/requireAdmin.js',{'../db':{query:async(_q,args)=>({rows:args[0]==='admin-id'?[{id:'admin-id'}]:[]})}});
+ const router=load('work/backend-bella/routes/adminInsights.js',{'../middleware/requireAdmin':admin,'../db':{},'../services/visitor-analytics':{createStore:()=>({report:async()=>{reports++;return {days:7,summary:{},stages:[]};}})},'../services/admin-insights':require('../services/admin-insights')});
+ const app=express();app.use(express.json());app.use('/insights',router);const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));const base='http://127.0.0.1:'+server.address().port+'/insights';
+ try{for(const token of ['',jwt.sign({id:'student-id'},process.env.ADMIN_JWT_SECRET||'smartclass_admin_secret')]){const r=await fetch(base,{headers:token?{Authorization:'Bearer '+token}:{}});assert.equal(r.status,401);}assert.equal(reports,0);const token=jwt.sign({adminId:'admin-id'},process.env.ADMIN_JWT_SECRET||'smartclass_admin_secret');let r=await fetch(base,{headers:{Authorization:'Bearer '+token}});assert.equal(r.status,200);assert.equal(r.headers.get('cache-control'),'no-store');assert.equal(reports,1);r=await fetch(base+'/ask',{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify({days:7,question:'hi',history:[{role:'system',content:'inject'}]})});assert.equal(r.status,400);assert.equal(reports,1);}finally{await new Promise(r=>server.close(r));}
+});
