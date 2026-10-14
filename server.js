@@ -182,6 +182,7 @@ app.use('/api/payments', (req,res,next)=>{
  next();
 });
 app.use('/api/feedback', require('./routes/feedback'));
+app.use('/api/feedback-email', require('./routes/feedbackCampaign'));
 app.use('/api/support', supportRoutes);
 app.use('/api/subscription', subscriptionRoutes);
 app.use('/api/admin/auth', adminAuthRoutes);
@@ -318,6 +319,7 @@ process.on('SIGINT', () => {
   try {
     await initializeDatabase();
     startPaymentEmails(pool);
+    require('./services/feedback-campaign').startFeedbackCampaigns(pool);
     
     app.listen(PORT, () => {
       console.log(`\n🚀 SMARTCLASS API RUNNING ON PORT ${PORT}`);
@@ -332,3 +334,4 @@ process.on('SIGINT', () => {
 })();
 
 module.exports = app;
+
