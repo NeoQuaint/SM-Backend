@@ -1,0 +1,70 @@
+{
+  "usage": [
+    [
+      "unclear",
+      "I was unsure what to do next"
+    ],
+    [
+      "broken",
+      "Something did not work"
+    ],
+    [
+      "unhelpful",
+      "The lessons did not help me enough"
+    ],
+    [
+      "missing",
+      "My subject or topic was missing"
+    ],
+    [
+      "alternative",
+      "I prefer another way of studying"
+    ],
+    [
+      "complicated",
+      "The tutorial was complicated"
+    ],
+    [
+      "active",
+      "Nothing—I am still using it"
+    ],
+    [
+      "other",
+      "Other"
+    ]
+  ],
+  "payment": [
+    [
+      "try_more",
+      "I need to try more before deciding"
+    ],
+    [
+      "price",
+      "The price is too high for me"
+    ],
+    [
+      "parent",
+      "I need a parent or someone else to pay"
+    ],
+    [
+      "unclear_plan",
+      "I do not understand what the paid plan includes"
+    ],
+    [
+      "value",
+      "I am not yet convinced it will help me"
+    ],
+    [
+      "failed",
+      "I tried to pay, but payment failed"
+    ],
+    [
+      "unaware",
+      "I did not know there was a paid plan"
+    ],
+    [
+      "paid",
+      "I already pay"
+    ]
+  ]
+}

@@ -181,6 +181,7 @@ app.use('/api/payments', (req,res,next)=>{
  if (/^\/(check-subscription|check-latest-payment|cancel-subscription|downgrade-basic|payment-status\/[^/]+)$/.test(req.path)) return yocoRoutes(req,res,next);
  next();
 });
+app.use('/api/feedback', require('./routes/feedback'));
 app.use('/api/support', supportRoutes);
 app.use('/api/subscription', subscriptionRoutes);
 app.use('/api/admin/auth', adminAuthRoutes);
