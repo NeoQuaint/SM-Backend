@@ -9,7 +9,7 @@ function setup() {
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../routes/neo.js'), 'utf8'), {
     require: name => name === 'express' ? { Router: () => router } : name === 'openai' ? class {} : {},
     process: { env: { DEEPINFRA_API_KEY: 'test-only', KOKORO_VOICE_ID: 'af_heart' } },
-    console: { log() {}, error() {} }, Buffer, setTimeout: () => 0,
+    console: { log() {}, error() {} }, Buffer, AbortSignal, setTimeout: () => 0,
     fetch: async (url, options) => { calls.push({ url, body: JSON.parse(options.body) }); return { ok: true, status: 200, arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer }; },
     module: { exports: {} },
   });

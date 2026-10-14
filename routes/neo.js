@@ -48,15 +48,45 @@ const performanceDescriptions = {
 
 // ==========================================
 // DEEPINFRA REQUEST QUEUE
-// Serializes all /speak calls so DeepInfra never sees a burst.
+// Reserve capacity for active lessons; only one speculative/download job runs.
+// Identical requests share one generation, including while waiting in the queue.
 // ==========================================
-let deepinfraQueue = Promise.resolve();
-
-const enqueueDeepInfra = (taskFn) => {
-  const result = deepinfraQueue.then(taskFn, taskFn);
-  // Swallow errors on the chain so one failure doesn't poison the queue
-  deepinfraQueue = result.catch(() => {});
-  return result;
+const voiceJobs = new Map();
+const voiceQueue = [];
+let activeVoiceJobs = 0, activeBackgroundJobs = 0;
+const pumpVoiceQueue = () => {
+  while (activeVoiceJobs < 3) {
+    voiceQueue.sort((a,b) => a.priority-b.priority);
+    const index = voiceQueue.findIndex(job => job.priority === 0 || activeBackgroundJobs < 1);
+    if (index < 0) return;
+    const job = voiceQueue.splice(index,1)[0];
+    job.started = true;
+    const background = job.priority > 0;
+    activeVoiceJobs++;
+    if (background) activeBackgroundJobs++;
+    Promise.resolve().then(job.task).then(job.resolve,job.reject).finally(() => {
+      voiceJobs.delete(job.key);
+      activeVoiceJobs--;
+      if (background) activeBackgroundJobs--;
+      pumpVoiceQueue();
+    });
+  }
+};
+const enqueueDeepInfra = (key, priority, task) => {
+  const existing = voiceJobs.get(key);
+  if (existing) {
+    if (!existing.started && priority < existing.priority) {
+      existing.priority = priority;
+      pumpVoiceQueue();
+    }
+    return existing.promise;
+  }
+  const job = {key,priority,task,started:false};
+  job.promise = new Promise((resolve,reject) => {job.resolve=resolve;job.reject=reject;});
+  voiceJobs.set(key,job);
+  voiceQueue.push(job);
+  pumpVoiceQueue();
+  return job.promise;
 };
 
 // Simple retry with backoff for 429s from DeepInfra
@@ -163,7 +193,7 @@ Think: the hill goes up 3 for every 2 steps. Try again!"`;
 // ==========================================
 router.post('/speak', async (req, res) => {
   try {
-    const { text } = req.body;
+    const { text, prefetch, offlineDownload } = req.body;
 
     if (typeof text !== 'string' || !text.trim()) {
       return res.status(400).json({ error: 'Text is required' });
@@ -203,8 +233,8 @@ router.post('/speak', async (req, res) => {
 
     console.log('🐢 Cache MISS — queued for DeepInfra:', cleanText.substring(0, 60));
 
-    // Serialize through the queue — DeepInfra sees one request at a time
-    const audioBuffer = await enqueueDeepInfra(async () => {
+    // Active lessons take precedence over speculative clips and offline downloads.
+    const audioBuffer = await enqueueDeepInfra(cacheKey, offlineDownload ? 2 : prefetch ? 1 : 0, async () => {
       const response = await fetchWithRetry(
         `https://api.deepinfra.com/v1/text-to-speech/${KOKORO_VOICE_ID}`,
         {
@@ -213,6 +243,7 @@ router.post('/speak', async (req, res) => {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${DEEPINFRA_API_KEY}`,
           },
+          signal: AbortSignal.timeout(20000),
           body: JSON.stringify({
             text: cleanText,
             model_id: 'hexgrad/Kokoro-82M',
@@ -561,7 +592,7 @@ router.get('/history', async (req, res) => {
 // HEALTH CHECK
 // ==========================================
 router.get('/health', (req, res) => {
-  res.json({ status: 'Neo route is awake', cacheSize: audioCache.size, voice: KOKORO_VOICE_ID });
+  res.json({ status: 'Neo route is awake', cacheSize: audioCache.size, voice: KOKORO_VOICE_ID, speechPipeline: 'lookahead-v1' });
 });
 
 // ==========================================
