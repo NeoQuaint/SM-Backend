@@ -89,18 +89,26 @@ const enqueueDeepInfra = (key, priority, task) => {
   return job.promise;
 };
 
-// Simple retry with backoff for 429s from DeepInfra
-const fetchWithRetry = async (url, options, maxRetries = 3) => {
-  let lastResponse = null;
+// Each provider attempt gets its own deadline; never reuse an expired signal.
+const fetchWithRetry = async (url, options, maxRetries = 2) => {
   for (let attempt = 0; attempt < maxRetries; attempt++) {
-    const response = await fetch(url, options);
-    if (response.status !== 429) return response;
-    lastResponse = response;
-    const waitMs = 500 * Math.pow(2, attempt); // 500, 1000, 2000
-    console.log(`⏳ DeepInfra 429 — waiting ${waitMs}ms then retrying (attempt ${attempt + 1}/${maxRetries})`);
-    await new Promise((r) => setTimeout(r, waitMs));
+    options.signal?.throwIfAborted();
+    const deadline = AbortSignal.timeout(45000);
+    const signal = options.signal ? AbortSignal.any([options.signal, deadline]) : deadline;
+    try {
+      const response = await fetch(url, { ...options, signal });
+      if (![429, 502, 503, 504].includes(response.status) || attempt === maxRetries - 1) return response;
+      await response.body?.cancel();
+    } catch (error) {
+      if (options.signal?.aborted) throw error;
+      const timedOut = deadline.aborted || error.name === 'TimeoutError';
+      if (!timedOut && !(error instanceof TypeError)) throw error;
+      if (attempt === maxRetries - 1) {
+        throw Object.assign(new Error(timedOut ? 'Kokoro provider timed out' : 'Kokoro provider unavailable'), { status: timedOut ? 504 : 502 });
+      }
+    }
+    await new Promise(resolve => setTimeout(resolve, 500 * 2 ** attempt));
   }
-  return lastResponse;
 };
 
 // ==========================================
@@ -243,7 +251,6 @@ router.post('/speak', async (req, res) => {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${DEEPINFRA_API_KEY}`,
           },
-          signal: AbortSignal.timeout(20000),
           body: JSON.stringify({
             text: cleanText,
             model_id: 'hexgrad/Kokoro-82M',
@@ -592,7 +599,7 @@ router.get('/history', async (req, res) => {
 // HEALTH CHECK
 // ==========================================
 router.get('/health', (req, res) => {
-  res.json({ status: 'Neo route is awake', cacheSize: audioCache.size, voice: KOKORO_VOICE_ID, speechPipeline: 'lookahead-v1' });
+  res.json({ status: 'Neo route is awake', cacheSize: audioCache.size, voice: KOKORO_VOICE_ID, speechPipeline: 'kokoro-retry-v2' });
 });
 
 // ==========================================
