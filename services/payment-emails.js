@@ -51,18 +51,9 @@ async function deliverPendingReceipts(pool, transporter, sender) {
   }
 }
 
-function startPaymentEmails(pool, env=process.env) {
-  if (!env.SUPPORT_EMAIL_PASSWORD) { console.warn('Payment emails need SUPPORT_EMAIL_PASSWORD; paid access is unaffected.'); return ()=>{}; }
-  const sender=env.SUPPORT_EMAIL || 'smartclass.za@gmail.com';
-  const nodemailer = require('nodemailer');
-  const transporter=nodemailer.createTransport({service:'gmail',auth:{user:sender,pass:env.SUPPORT_EMAIL_PASSWORD},connectionTimeout:15000,greetingTimeout:15000,socketTimeout:30000});
-  let running=false,initialized=false;
-  const tick=async()=>{
-    if(running)return;running=true;
-    try { if(!initialized){await pool.query(SCHEMA);initialized=true;} await deliverPendingReceipts(pool,transporter,sender); }
-    catch { console.warn('Payment email queue temporarily unavailable; retrying shortly.'); }
-    finally { running=false; }
-  };
-  void tick();const timer=setInterval(tick,15000);timer.unref?.();return ()=>clearInterval(timer);
+function startPaymentEmails() {
+  // Branded receipts are delivered by the private SmartClass Vercel mail worker.
+  // Keep the historical receipt records; never run the legacy Gmail sender alongside it.
+  return ()=>{};
 }
 module.exports={startPaymentEmails,deliverPendingReceipts,receiptMessage,SCHEMA};
