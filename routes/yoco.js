@@ -379,5 +379,5 @@ router.get('/check-latest-payment', authMiddleware, async (req, res) => {
   }
 });
 
-router.get('/health', (req, res) => res.json({ status: 'ok', paymentHandler: 'verified-checkout-v2', profileActions: 'verified-v1', paymentEmails: 'queued-v1', paymentEmailsConfigured: Boolean(process.env.SUPPORT_EMAIL_PASSWORD) }));
+router.get('/health', (req, res) => res.json({ status: 'ok', paymentHandler: 'verified-checkout-v2', profileActions: 'verified-v1', paymentEmails: 'smartclass-private-mail-v2', paymentEmailsConfigured: false }));
 module.exports = router;
